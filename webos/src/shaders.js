@@ -887,3 +887,27 @@ uniform float k;
 out vec4 oc;
 void main() { ivec2 p = ivec2(gl_FragCoord.xy); oc = mix(texelFetch(tS, p, 0), texelFetch(tR, p, 0), k); }
 `;
+
+// Animated screensaver: the light rippling over the frozen background. A factor for every pixel of it (drawn with
+// multiplying blend): where the sun reaches, the direct light as it would be with the ripples of now (tW) over the
+// direct light with the ripples of the moment the background was drawn (tW0). The position comes from the
+// background's depth; this cannot tell how much of a pixel was direct light, so it is an approximation.
+const G_RIPPLE = GH + S_B + `
+uniform sampler2D tDp;
+uniform sampler2D tW0;
+out vec4 oc;
+void main() {
+  float dp = texelFetch(tDp, ivec2(gl_FragCoord.xy), 0).r;
+  if (dp < 1e-5) { oc = vec4(1.); return; } // the background
+  vec2 nd = gl_FragCoord.xy * g.res.zw * 2. - 1.;
+  vec3 rv = g.fwd.xyz + g.right.xyz * (nd.x * g.right.w) + g.up.xyz * (nd.y * g.up.w);
+  float zl = g.fwd.w / dp; vec3 wp = g.cam.xyz + rv * zl; float d = length(rv) * zl;
+  vec2 q = cuv(wp);
+  float a = min(pow(texture(tW, q / 4.1).r, 1.4) * 2.6 * (.45 + texture(tW, q.yx / 6.9 + .37).r * 1.3), 2.6);
+  float b = min(pow(texture(tW0, q / 4.1).r, 1.4) * 2.6 * (.45 + texture(tW0, q.yx / 6.9 + .37).r * 1.3), 2.6);
+  float far = ss(35., 100., d);
+  float f = (.10 + mix(a, .33, far) * 2.5) / (.10 + mix(b, .33, far) * 2.5);
+  float lit = shadow1(wp + g.sun.xyz * .5);
+  oc = vec4(vec3(mix(1., clamp(f, .5, 2.2), lit * .75)), 1.);
+}
+`;

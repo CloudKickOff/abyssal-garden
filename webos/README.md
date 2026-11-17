@@ -13,7 +13,7 @@ used unchanged. This folder replaces the renderer:
 | [`src/quality.js`](src/quality.js) | Detail levels, with a new **TV** level below Low |
 | [`template.html`](template.html) | The page, with CSS that Chromium 68 understands |
 
-Not ported yet: the soundscape and anti-aliasing.
+Not ported: anti-aliasing. The soundscape is the original's, unchanged.
 
 ## Build
 
@@ -66,17 +66,18 @@ ssh root@TV_ADDRESS "luna-send -i luna://com.webos.appInstallService/dev/install
 | Blue | Swim faster |
 | Back | Menu; from the menu, leaves the app |
 
-The menu also has three buttons:
+The menu also has a row of buttons:
 
 - **Screensaver** is animated. For each view along the tour path it draws everything that stands still (terrain,
   rocks, sponges, corals) once into a background, then every frame adds only what moves: kelp, fish, bubbles, the
-  water surface and the light shafts. On an LG CX that runs at 15 frames a second at 1280×720 with full draw
-  distance. The light rippling over the rocks is part of the background, so it holds still. A view stays for 40
+  water surface and the light shafts, plus a pass that makes the light on the rocks ripple. On an LG CX that runs
+  at about 15 frames a second at 1280×720 with full draw distance (about 9 at 1920×1080). A view stays for 40
   seconds. `Play` on the remote starts it too.
 - **Stills** shows 1920×1080 pictures instead, each drawn in the background and faded in over the last (about one
   every ten seconds).
 
   Any key ends either one.
+- **Sound** turns the soundscape on and off (`M` on a keyboard).
 - **Measure speed** times the frame with each part left out in turn, and lists how long loading took.
 
 While the app is open it tells webOS not to start its own screensaver.
@@ -95,7 +96,7 @@ Serve `app/` from any web server and open it in Chrome. It uses keyboard and mou
 
 The LG CX has a Mali-G51 graphics chip, which is limited by triangle count as much as by pixels. The TV level:
 
-- keeps one leaf in eight, and thins rocks, sponges, corals, fish and glints further;
+- keeps one leaf in eight and then six kelp plants in ten, and thins rocks, sponges, corals, fish and glints further;
 - sorts the boulders into the culling grid and gives them, the sponges and the far terrain coarser versions;
 - uses a rock shader with 13 texture samples instead of 27, and 8 light-shaft steps instead of 12;
 - renders at a fixed 480×270 with 40% draw distance (the screensaver uses 1920×1080 and full distance).

@@ -41,7 +41,7 @@ const shader = (type, src) => {
   shaders.set(src, s); return s;
 };
 // every sampler name has a fixed texture unit; the G uniform block is always binding point 0
-const TEXU = { tSh: 0, tW: 1, tD: 2, tV: 3, tM: 4, tDp: 5, tS: 6, tR: 7, tB: 8, t: 6, tP: 6 };
+const TEXU = { tSh: 0, tW: 1, tD: 2, tV: 3, tM: 4, tDp: 5, tS: 6, tR: 7, tB: 8, t: 6, tP: 6, tW0: 8 };
 const prog = (vs, fs) => {
   const p = gl.createProgram(); gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) fail('Shader link: ' + ('' + gl.getProgramInfoLog(p)).slice(0, 600));
@@ -100,6 +100,8 @@ const tVol = gl.createTexture();
   for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(T3, p, gl.CLAMP_TO_EDGE);
 }
 const fWater = fbo(tWater), fDetail = fbo(tDetail), fShadow = fbo(null, tShadow);
+// the water texture as it was when the animated screensaver's background was drawn (see liveTick())
+const tWater0 = tex(WATER, WATER, HDR, { mips: 5, min: gl.LINEAR_MIPMAP_LINEAR, wrap: gl.REPEAT }), fWater0 = fbo(tWater0);
 
 const UB = new Float32Array(60), UBS = new Float32Array(60);
 const ubo = gl.createBuffer(), uboS = gl.createBuffer();
@@ -115,7 +117,7 @@ const pBub = prog(G_BUB_V, G_BUB_F), pSnow = prog(G_SNOW_V, G_SNOW_F), pGl = pro
 const pWater = prog(G_FSV, G_WATER), uWater = gl.getUniformLocation(pWater, 'tm');
 const pDown0 = prog(G_FSV, G_DOWN0), pDown = prog(G_FSV, G_DOWN), pUp = prog(G_FSV, G_UP);
 const pRays = prog(G_FSV, G_RAYS), pRB = prog(G_FSV, G_RBLUR), pPost = prog(G_FSV, G_POST);
-const pFade = prog(G_FSV, G_FADE), uFade = gl.getUniformLocation(pFade, 'k');
+const pFade = prog(G_FSV, G_FADE), uFade = gl.getUniformLocation(pFade, 'k'), pRipple = prog(G_FSV, G_RIPPLE);
 
 // ---------------------------------------------------------------- sun + shadow matrix
 const SUN = (() => { const v = [0.27, 1, -0.24], l = hypot(...v); return v.map((c) => c / l); })();
@@ -389,7 +391,8 @@ const ibSolids = vbuf(solidData);
 // are sorted into the culling grid and get a far version, as do the sponges; small rocks, pebbles and sponges keep
 // every 2nd instance, corals every 3rd, tube sponges every 4th, fish every 5th, glints every 8th, drifting particles every
 // 2nd; the terrain past 40 m is a coarser mesh (farTerrain);
-// rocks, sponges and corals are drawn to 3/4 and 2/3 of their distance (DF, PROPD); the terrain stops at 130 m (past
+// four kelp plants in ten are left out (thinPlants); rocks, sponges and corals are drawn to 3/4 and 2/3 of their
+// distance (DF, PROPD); the terrain stops at 130 m (past
 // that the haze hides nearly all of it); and everything that stands on the terrain is drawn before it, so the
 // terrain behind is never shaded.
 const DF = LEAN ? 0.75 : 1;
@@ -416,7 +419,22 @@ const cellSort = (first, n) => {
   return { buf: vbuf(o), start, lo, hi, mar };
 };
 const boulders = LEAN ? [0, 1, 2, 3].map((i) => cellSort(Wd.solids.ranges[i][0], Wd.solids.ranges[i][1])) : null;
+// Drops the leaves of a cell-sorted leaf set (36 bytes each) that stand in `part` of the 1.3 m squares of the seabed,
+// picked by a hash: whole kelp plants go, rather than every plant getting thinner. The same squares for every set.
+const thinPlants = (c, part) => {
+  const u = c.buf instanceof ArrayBuffer ? new Uint8Array(c.buf) : c.buf, f = new Float32Array(u.buffer, u.byteOffset, c.n * 9);
+  const o = new Uint8Array(c.n * 36), st = new Uint32Array(c.start.length); let n = 0;
+  for (let i = 0; i + 1 < c.start.length; i++) {
+    st[i] = n;
+    for (let j = c.start[i]; j < c.start[i + 1]; j++) {
+      const h = sin(floor(f[j * 9] / 1.3) * 127.1 + floor(f[j * 9 + 2] / 1.3) * 311.7) * 43758.5453;
+      if (h - floor(h) >= part) o.set(u.subarray(j * 36, j * 36 + 36), n++ * 36);
+    }
+  }
+  st[c.start.length - 1] = n; c.start = st; c.buf = o.subarray(0, n * 36); c.n = n;
+};
 if (LEAN) {
+  thinPlants(Wd.big, 0.4); thinPlants(Wd.bigF, 0.4);
   for (const i of [0, 1, 2]) thinCells(Wd.props[i], 2); for (const i of [3, 4]) thinCells(Wd.props[i], 3); thinCells(Wd.props[5], 4);
   for (const i of [0, 1, 2, 6]) thinCells(Wd.chunks[i], 2);
   // rocks carry the distance at which they have shrunk away (for materials 0 and 1, the 11th float)
@@ -718,7 +736,7 @@ if (debug) window.SK = SK;
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
-if (window.bench) window.state = () => ({ x: F[CX], y: F[CY], z: F[CZ], yaw: F[YAW], pitch: F[PIT], pOn, menu, auto, cruise, fast, W, H, det, saver, svPhase, stepI, lvStep, lvHave, fadeAt, now: F[LAST], flt: F[FLT] });
+if (window.bench) window.state = () => ({ x: F[CX], y: F[CY], z: F[CZ], yaw: F[YAW], pitch: F[PIT], pOn, menu, auto, cruise, fast, W, H, det, saver, svPhase, stepI, lvStep, lvHave, fadeAt, now: F[LAST], flt: F[FLT], audio: typeof AC === 'undefined' || !AC ? 'none' : AC.state, leaves: Wd.big.n });
 // the scripted flight (FLY) as an autopilot: one minute through the whole world, over and over
 const fly = (on) => { auto = on; F[FLT] = 0; cruise = 0; F[VX] = F[VY] = F[VZ] = 0; lkx = lky = l2x = l2y = mdx = mdy = 0; };
 const goTo = (i) => { fly(false); view = i; lookAt(...POSES[i]); };
@@ -731,8 +749,10 @@ let busy = false, fAvg = 0;
 // 2, animated: 1280x720. The parts of a view that do not move (terrain, rocks, sponges, corals, set pieces, the
 //    background) are drawn once into a background with its depth; every frame then starts from a copy of it and adds
 //    only what moves (fish, kelp, the water surface, bubbles and specks, light shafts). The light rippling over the
-//    rocks is part of the background, so it stands still. A view stays for LIVE_VIEW.
+//    rocks is in the background too; a pass over the copy (G_RIPPLE) rescales it from the ripples of the moment the
+//    background was drawn (kept in tWater0) to those of now. A view stays for LIVE_VIEW.
 const SAVER_FADE = 3000, SAVER_HOLD = 6000, LIVE_VIEW = 40000;
+let LIVE_PIX = 1280 * 720; try { LIVE_PIX = +localStorage.abyssalLivePix || LIVE_PIX; } catch (e) {} // (the stored value: for trying other sizes)
 let fadeAt = 0, hShown = 0, svPhase = 0, svPix = 0, svDet = 0; // phase: 0 pick the next view, 1 drawing it, 2 showing it
 let lvStep = 0, lvAt = 0, lvCur = 0, lvHave = false;
 const UBc = new Float32Array(60), RCc = new Float64Array(32), UBn = new Float32Array(60), RCn = new Float64Array(32); // the cameras of the view on screen and of the next
@@ -740,7 +760,7 @@ function saverOn(mode) {
   if (mode === saver || dead) return;
   if (!saver) { svPix = pix; svDet = det; }
   saver = mode; fly(false);
-  if (mode) { pix = min(mode > 1 ? 1280 * 720 : 1920 * 1080, DW * DH); det = 1; svPhase = 0; lvHave = false; fadeAt = -1e9; ui(false); } else { pix = svPix; det = svDet; lookAt(...POSES[view]); }
+  if (mode) { pix = min(mode > 1 ? LIVE_PIX : 1920 * 1080, DW * DH); det = 1; svPhase = 0; lvHave = false; fadeAt = -1e9; ui(false); } else { pix = svPix; det = svDet; lookAt(...POSES[view]); }
   body.classList.toggle('s', !!mode); resize();
 }
 const nextView = () => { F[FLT] = (F[FLT] + 3.7) % FLYT; flyAt(); };
@@ -759,11 +779,16 @@ function liveTick(now) {
     if (++lvStep < 4) return; // (the view on screen holds still meanwhile)
     // it becomes the view on screen: the last frame of the old one stays as A, and fades into the new frames
     lvCur = 1 - lvCur; UBc.set(UBn); RCc.set(RCn); flip(); fadeAt = lvAt = now; lvHave = true; svPhase = 2;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fWater); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fWater0);
+    gl.blitFramebuffer(0, 0, WATER, WATER, 0, 0, WATER, WATER, gl.COLOR_BUFFER_BIT, gl.NEAREST); unit(8, tWater0); gl.generateMipmap(T2);
   }
   if (!lvHave) return;
   useCam(UBc, RCc); waterTex();
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fSt[lvCur]); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fScene);
   gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+  // the rippling light: multiplies the copy, reading the background's own depth
+  flat(); gl.bindFramebuffer(FB, fScene); gl.viewport(0, 0, W, H); gl.enable(gl.BLEND); gl.blendFunc(gl.DST_COLOR, gl.ZERO);
+  gl.useProgram(pRipple); unit(5, tSt[lvCur * 2 + 1]); unit(8, tWater0); tri3(); gl.disable(gl.BLEND); unit(5, tDp);
   for (let i = 4; i < STEPS.length; i++) STEPS[i][1]();
   { const b = fB; fB = fC; fC = b; } hShown++; // the new frame is B; A is only seen during the fade
   if (now - lvAt > LIVE_VIEW) svPhase = 0;
@@ -823,13 +848,13 @@ function frame(now) {
     // TV pointer: the further from the middle of the screen, the faster the view turns that way
     if (pOn && now - pT > 6e3) pOn = false;
     if (pOn && !menu) {
-      const ax = abs(pjx) - 0.12, ay = abs(pjy) - 0.12;
-      if (ax > 0) lkx += (pjx < 0 ? -1 : 1) * ax * ax * 2.2 * dt;
-      if (ay > 0) lky += (pjy < 0 ? -1 : 1) * ay * ay * 1.8 * dt;
+      const ax = abs(pjx) - 0.2, ay = abs(pjy) - 0.2; // nothing happens in the middle 40% of the screen
+      if (ax > 0) lkx += (pjx < 0 ? -1 : 1) * ax * ax * 0.9 * dt;
+      if (ay > 0) lky += (pjy < 0 ? -1 : 1) * ay * ay * 0.6 * dt;
     }
-    lkx += (kyr - kyl) * 1.3 * dt; wv *= exp(-dt * 3);
+    lkx += (kyr - kyl) * (TV ? 0.7 : 1.3) * dt; wv *= exp(-dt * 3);
     // mouse look through two cascaded low-pass stages
-    const kq = 1 - exp(-dt * 30); lkx += mdx * 0.0022; lky += mdy * 0.0022; mdx = 0; mdy = 0;
+    const kq = 1 - exp(-dt * (TV ? 5 : 30)); lkx += mdx * 0.0022; // (a TV turns slowly into and out of a turn) lky += mdy * 0.0022; mdx = 0; mdy = 0;
     const ax = lkx * kq, ay = lky * kq; lkx -= ax; lky -= ay; l2x += ax; l2y += ay;
     const dyw = l2x * kq, dpt = l2y * kq; l2x -= dyw; l2y -= dpt;
     const yaw = F[YAW] + dyw; let pitch = F[PIT] - dpt; pitch = pitch < -1.55 ? -1.55 : pitch > 1.55 ? 1.55 : pitch;
@@ -864,7 +889,9 @@ if (window.bench) window.step = (n = 1, ms = 33) => { for (let t = F[LAST]; n-- 
 //   yellow          stats                        blue           swim faster
 //   Back            menu (from the menu: leave the app)
 // The screensavers are buttons in the menu; G (or Play on a remote) starts the animated one, T the stills.
-const sound = () => 0; // the soundscape is not ported yet
+// the soundscape (../../source/src/audio.js) starts on the first key or click; it is set up after this file has run
+const snd = () => { try { sound(); } catch (e) {} };
+const soundOnOff = () => { snd(); try { mute(); $('n').textContent = 'Sound ' + (muted ? 'off' : 'on'); } catch (e) {} };
 const held = new Uint8Array(512); // remotes repeat keydown without marking it as a repeat
 const key = (e, v) => {
   const c = e.keyCode;
@@ -880,6 +907,7 @@ const key = (e, v) => {
       else if (c === 404) goTo((view + 1) % 6);
       else if (c === 406) fast ^= 1;
       else if (c === 80) measure();
+      else if (c === 77) soundOnOff();
       else if (c === 71 || c === 415) saverOn(2);
       else if (c === 84) saverOn(1);
       else if (c >= 49 && c <= 54) goTo(c - 49);
@@ -888,7 +916,7 @@ const key = (e, v) => {
   held[c & 511] = v;
 };
 addEventListener('keydown', (e) => {
-  const c = e.keyCode;
+  const c = e.keyCode; snd();
   if (saver) { if (c === 72 || c === 405) key(e, 1); else { saverOn(0); if (c === 27 || c === 461) ui(true); } e.preventDefault(); return; } // any key ends the screensaver
   if (!menu) { key(e, 1); if (TV) e.preventDefault(); return; }
   if (c === 72 || c === 405 || c === 80) key(e, 1); // behind the menu only the stats and measure keys work
@@ -900,7 +928,7 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => key(e, 0));
 const release = () => { kf = kb = kl = kr = ku = kd = ks = kyl = kyr = 0; tId = -1; tN = 0; pOn = false; held.fill(0); };
 const capture = () => { const p = canvas.requestPointerLock({ unadjustedMovement: true }); if (p && p.catch) p.catch(() => canvas.requestPointerLock()).catch(() => 0); };
-canvas.addEventListener('click', () => { if (saver) saverOn(0); else if (TV) cruise ^= 1; else capture(); });
+canvas.addEventListener('click', () => { snd(); if (saver) saverOn(0); else if (TV) cruise ^= 1; else capture(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement === canvas) { mdx += e.movementX; mdy += e.movementY; }
   else if (TV) { pjx = e.clientX / innerWidth * 2 - 1; pjy = e.clientY / innerHeight * 2 - 1; pOn = true; pT = performance.now(); }
@@ -932,8 +960,8 @@ const ui = (m) => {
   // focus the dive button so Enter / OK works (delayed: it can't take focus while still hidden)
   if (m) { release(); for (const t of [100, 1000]) setTimeout(() => menu && document.activeElement === body && bDive.focus(), t); } else document.activeElement.blur();
 };
-const go = () => { ui(false); bDive.textContent = 'Resume'; if (!TV && !mob) capture(); };
-bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => saverOn(2); $('u').onclick = () => saverOn(1);
+const go = () => { snd(); ui(false); bDive.textContent = 'Resume'; if (!TV && !mob) capture(); };
+bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => { snd(); saverOn(2); }; $('u').onclick = () => { snd(); saverOn(1); }; $('n').onclick = soundOnOff;
 // detail buttons: the current level is lit, the others reload the page with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 3 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssalGL', 3 - i); location.reload(); }; });
 document.addEventListener('pointerlockchange', () => { if (!TV && !saver) ui(!document.pointerLockElement); });
