@@ -234,6 +234,7 @@ const vec3 PCOL = vec3f(.58, .66, .98);
 const vec3 SUNC = vec3f(1.7, 1.6, 1.45);
 const float TAU = 6.2831853;
 const bool LOW = ${LV > 1};
+const bool LEAN = ${LEAN};
 float sat(float x) { return clamp(x, 0., 1.); }
 float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0., 1.); return t * t * (3. - 2. * t); }
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2f(.06711056, .00583715)))); }
@@ -324,6 +325,8 @@ void main() {
   VI i = VI(a_p, a_n, a_a, a_b, a_c); VO o;
   float sc = i.a.w;
   if (i.c.x < 1.5 && i.c.z > 1.5 && g.res.x > 0.) { sc *= 1. - ss(i.c.z * .7, i.c.z, distance(i.a.xyz, g.cam.xyz) / g.mis.z); }
+  // the TV level draws sponges and corals (materials 4, 5) less far: they shrink away instead of popping
+  if (LEAN && i.c.x > 3.5 && g.res.x > 0.) { sc *= 1. - ss(${fl(PROPD * 0.72)}, ${fl(PROPD)}, distance(i.a.xyz, g.cam.xyz) / g.mis.z); }
   vec3 w = i.a.xyz + qrot(i.b, i.p * sc);
   w.y += sin(g.cam.w * .3 + i.c.y * 40.) * i.c.w;
   o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = qrot(i.b, i.n.xyz); o.op = i.p * i.a.w + i.c.y * 37.; o.on = i.n.xyz;
@@ -349,15 +352,22 @@ void main() {
   vec3 on = normalize(i.on) * fl_; vec3 n0 = normalize(i.n) * fl_;
   float dist = length(i.wp - g.cam.xyz);
   float ts = mat >= 2 ? i.m.z : 1.;
-  TP A = tri(i.op, on, .1 * ts); TP B = tri(i.op, on, .43 * ts); TP C = tri(i.op, on, 1.9 * ts); TP F = tri(i.op, on, 6.7 * ts); float fk = ss(10., 1.5, dist) * f32(mat <= 1);
-  vec4 Wd = textureSample(tD, sR, vec2f(i.op.x * .06, (i.op.y + i.op.z) * .7));
+  // LEAN (the TV level) takes 13 texture samples here instead of 27: two detail scales instead of four, the wood and
+  // streak textures only for the ship and the fluke, one-channel caustics, one occlusion sample
+  TP A = tri(i.op, on, .1 * ts); TP B = tri(i.op, on, .43 * ts); TP C = B; TP F = B; float fk = 0.;
+  if (!LEAN) { C = tri(i.op, on, 1.9 * ts); F = tri(i.op, on, 6.7 * ts); fk = ss(10., 1.5, dist) * f32(mat <= 1); }
+  vec4 Wd = vec4f(.5); vec4 sk = vec4f(.5); vec4 sk2 = vec4f(.5);
+  if (!LEAN || mat == 3) { Wd = textureSample(tD, sR, vec2f(i.op.x * .06, (i.op.y + i.op.z) * .7)); }
   float big = textureSample(tD, sR, i.op.xz * .013 + i.op.y * .021).a;
-  float big2 = textureSample(tD, sR, i.op.zx * .031 + i.op.y * .043 + .37).a;
+  float big2 = big;
+  if (!LEAN) { big2 = textureSample(tD, sR, i.op.zx * .031 + i.op.y * .043 + .37).a; }
   float sgro = 0.;
-  vec4 sk = textureSample(tD, sR, vec2f((i.op.x + i.op.z) * .33, i.op.y * .035));
-  vec4 sk2 = textureSample(tD, sR, vec2f((i.op.x - i.op.z) * 1.1, i.op.y * .11));
+  if (!LEAN || mat == 2) {
+    sk = textureSample(tD, sR, vec2f((i.op.x + i.op.z) * .33, i.op.y * .035));
+    sk2 = textureSample(tD, sR, vec2f((i.op.x - i.op.z) * 1.1, i.op.y * .11));
+  }
   vec4 gm = textureSample(tM, sC, i.wp.xz / 384. + .5);
-  vec3 ca = caus(i.wp, dist);
+  vec3 ca = LEAN ? vec3f(caus2(i.wp, dist)) : caus(i.wp, dist);
   float hgt = A.h * .5 + B.h * .35 + C.h * .15;
   float bump = 1.7; float gloss = .1; vec3 alb = vec3f(0.); vec3 emi = vec3f(0.); float vao = 1.; float flu = 0.;
   float flt = ss(.72, .93, n0.y);
@@ -411,9 +421,10 @@ void main() {
   float rip = mat == 0 ? flt * gm.a * cos((i.wp.x * .8 + i.wp.z * .35) * 5. + A.c * 9.) * .65 : 0.;
   vec3 N = normalize(qrot(i.q, normalize(on + (A.n * .85 + B.n * .65 + C.n * .45 * ss(60., 12., dist) + F.n * .5 * fk) * bump + vec3f(.8, sgro, .35) * vec3f(rip, 1., rip))));
   vec3 L = g.sun.xyz; vec3 V = normalize(g.cam.xyz - i.wp);
-  vec4 v1 = vol(i.wp + n0 * 1.5); vec4 v2 = vol(i.wp + n0 * 4.5);
+  vec4 v1 = vol(i.wp + n0 * 1.5); vec4 v2 = v1;
+  if (!LEAN) { v2 = vol(i.wp + n0 * 4.5); }
   float ao = (sat((v1.r - .5) * 8.) * .55 + sat((v2.r - .5) * 2.7) * .45) * vao * ss(.12, .6, hgt);
-  float z = zone(i.wp);
+  float z = mix(g.sun.w, gm.b, .2); // zone(i.wp), from the sample already taken
   vec3 E = sunE(i.wp.y, z) * shadow9(i.wp + n0 * .35);
   float ndl = sat(dot(N, L));
   vec3 am = (amb(i.wp, N, v1.g, z) + side(i.wp, N, sat((v2.r - .5) * 2.7), z)) * ao;
@@ -421,7 +432,7 @@ void main() {
   vec3 c = alb * (dl + am) + emi + alb * flu * dot(dl + am, vec3f(.1, .5, .5));
   vec3 H = normalize(V + L);
   c += E * (.25 + ca) * pow(sat(dot(N, H)), mix(10., 70., gloss)) * gloss * ndl * 1.8;
-  c += (amb(i.wp, reflect(-V, N), v1.g, z) + side(i.wp, reflect(-V, N), sat((v2.r - .5) * 2.7), z)) * ao * (.08 + gloss) * .6 * pow(1. - sat(dot(N, V)), 2.5);
+  if (!LEAN) { c += (amb(i.wp, reflect(-V, N), v1.g, z) + side(i.wp, reflect(-V, N), sat((v2.r - .5) * 2.7), z)) * ao * (.08 + gloss) * .6 * pow(1. - sat(dot(N, V)), 2.5); }
   oc = fin(fog(c, i.wp, z));
 }
 `;
@@ -684,7 +695,7 @@ void main() {
   VO o; int i = gl_VertexID;
   vec2 p = vec2f(f32(i & 1), f32(i >> 1)) * 2. - 1.;
   o.wp = g.cam.xyz + g.fwd.xyz + g.right.xyz * (p.x * g.right.w) + g.up.xyz * (p.y * g.up.w);
-  o.cp = vec4f(p, 3e-7, 1.);
+  o.cp = vec4f(p, 0., 1.); // depth 0, the cleared value: drawn with a greater-or-equal test (a tiny depth is lost on some chips)
   emit(o);
 }
 `;
@@ -781,7 +792,9 @@ void main() {
   vec2 nd = uv * 2. - 1.;
   vec3 rv = g.fwd.xyz + g.right.xyz * (nd.x * g.right.w) + g.up.xyz * (nd.y * g.up.w);
   float rl = length(rv); vec3 rd = rv / rl;
-  float zl = g.fwd.w / max(dp, 1e-6);
+  // at most 10 km: this goes into a 16-bit float, and where only the background is behind a pixel (depth ~0) a
+  // larger value overflows to infinity there, which the blur and the composite turn into black
+  float zl = g.fwd.w / max(dp, 1e-5);
   float tm = min(zl * rl, 120.);
   if (rd.y > 1e-4) { tm = min(tm, -g.cam.y / rd.y); }
   vec3 ro = g.cam.xyz; vec3 sx = g.sun.xyz; vec3 k = kd(g.sun.w); vec3 sgz = sg(g.sun.w);
@@ -836,7 +849,7 @@ void main() {
   vec4 fc = gl_FragCoord;
   vec2i px = vec2i(fc.xy);
   vec2 uv = fc.xy * g.res.zw;
-  float zf = g.fwd.w / max(texelFetch(tDp, px, 0).r, 1e-6);
+  float zf = g.fwd.w / max(texelFetch(tDp, px, 0).r, 1e-5);
   // depth-aware upsample of the half-res shafts
   vec2 h = fc.xy * .5 - .5; vec2 b = floor(h); vec2 f = h - b; vec2i bi = vec2i(b);
   vec2i mx = textureSize(tR, 0) - 1;
@@ -848,7 +861,7 @@ void main() {
     float w = (bw + .02) / (.02 + abs(r.a - zf) / zf);
     acc += r.rgb * w; ws += w;
   }
-  vec3 c = texelFetch(tS, px, 0).rgb + acc / ws;
+  vec3 c = texelFetch(tS, px, 0).rgb + acc / max(ws, 1e-6);
   vec3 bl = textureLod(tB, uv, 0.).rgb;
   c = mix(c, bl, .06) + bl * .03;
   c *= g.mis.x;
@@ -864,4 +877,13 @@ void main() {
   float n = ign(fc.xy) + ign(fc.xy + 37.) - 1.;
   oc = vec4f(c + n / 255., 1.);
 }
+`;
+
+// the screen: frame A (tS) faded k of the way to frame B (tR)
+const G_FADE = GH + `
+uniform sampler2D tS;
+uniform sampler2D tR;
+uniform float k;
+out vec4 oc;
+void main() { ivec2 p = ivec2(gl_FragCoord.xy); oc = mix(texelFetch(tS, p, 0), texelFetch(tR, p, 0), k); }
 `;

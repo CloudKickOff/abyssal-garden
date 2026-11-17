@@ -1,3 +1,5 @@
 node_modules
 app
 dist
+world.bin
+world.bin.part

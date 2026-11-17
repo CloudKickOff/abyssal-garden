@@ -7,10 +7,12 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('c'), info = $('i'), body = document.body;
 if (TV) document.documentElement.className = 'tv';
 let loaded = 0, dead; // dead: the graphics context was lost
+const stages = []; // [loading stage, when it began] for measure()
 const tick = (ms) => new Promise((r) => setTimeout(r, ms || 0));
 // loading bar: each stage glides it to `to` (the share done) over ~`ms`
 const say = async (m, to, ms) => {
   if (!dead) $('s').textContent = m;
+  stages.push([m, performance.now()]);
   const b = $('b'); b.style.transition = `transform ${ms}ms cubic-bezier(.3,.5,.5,1)`; b.style.transform = `scaleX(${to})`; loaded = to;
   await tick(60); // long enough for the text and the bar to be painted before this thread is busy again
 };
@@ -113,6 +115,7 @@ const pBub = prog(G_BUB_V, G_BUB_F), pSnow = prog(G_SNOW_V, G_SNOW_F), pGl = pro
 const pWater = prog(G_FSV, G_WATER), uWater = gl.getUniformLocation(pWater, 'tm');
 const pDown0 = prog(G_FSV, G_DOWN0), pDown = prog(G_FSV, G_DOWN), pUp = prog(G_FSV, G_UP);
 const pRays = prog(G_FSV, G_RAYS), pRB = prog(G_FSV, G_RBLUR), pPost = prog(G_FSV, G_POST);
+const pFade = prog(G_FSV, G_FADE), uFade = gl.getUniformLocation(pFade, 'k');
 
 // ---------------------------------------------------------------- sun + shadow matrix
 const SUN = (() => { const v = [0.27, 1, -0.24], l = hypot(...v); return v.map((c) => c / l); })();
@@ -131,12 +134,65 @@ const SUN = (() => { const v = [0.27, 1, -0.24], l = hypot(...v); return v.map((
 }
 
 // ---------------------------------------------------------------- world generation
-await say('Sculpting the seabed…', 0.25, 1200);
+// The slow parts of the generated world (plants, rocks, meshes, collision grid: about 35 MB) are kept in IndexedDB,
+// because generating them takes over two minutes on a TV. The terrain mesh is not: it is another 32 MB, a webOS app
+// gets 50 MB of storage, and it is rebuilt from the density in under 10 s. BUILD (set by build.mjs) changes with the generator's code, and with it the
+// saved world; WORLDV is to be raised by hand when the generation code in this file or the density shader changes.
+const WORLDV = 4;
+// Each array is its own record so that saving never copies more than one at a time; the 'tree' record, written last,
+// holds the structure with { $: key } where an array was and marks the save as complete.
+const idb = () => new Promise((ok, no) => { const r = indexedDB.open('abyssal', 1); r.onupgradeneeded = () => r.result.createObjectStore('w'); r.onsuccess = () => ok(r.result); r.onerror = r.onblocked = () => no(r.error); });
+const idbDo = (db, mode, f) => new Promise((ok, no) => { const t = db.transaction('w', mode), q = f(t.objectStore('w')); t.oncomplete = () => ok(q && q.result); t.onerror = t.onabort = () => no(t.error); });
+const worldKey = BUILD + ':' + WORLDV + ':' + LV;
+async function worldLoad() {
+  const db = await idb();
+  if (!db.objectStoreNames.contains('w')) { db.close(); indexedDB.deleteDatabase('abyssal'); return null; } // a broken leftover
+  const tree = await idbDo(db, 'readonly', (s) => s.get('tree'));
+  if (!tree || tree.key !== worldKey) { db.close(); return null; }
+  const fill = async (o) => { for (const k in o) { const v = o[k]; if (v && typeof v === 'object') { if ('$' in v) o[k] = await idbDo(db, 'readonly', (s) => s.get(v.$)); else await fill(v); } } return o; };
+  const w = await fill(tree.world); db.close(); return w;
+}
+async function worldSave(world) {
+  const db = await idb(), leaves = []; let n = 0;
+  const strip = (o) => { const r = Array.isArray(o) ? [] : {}; for (const k in o) { const v = o[k]; if (v && (ArrayBuffer.isView(v) || v instanceof ArrayBuffer)) { leaves.push(['a' + n, v]); r[k] = { $: 'a' + n++ }; } else r[k] = v && typeof v === 'object' ? strip(v) : v; } return r; };
+  const tree = { key: worldKey, world: strip(world) };
+  await idbDo(db, 'readwrite', (s) => s.clear());
+  for (const l of leaves) await idbDo(db, 'readwrite', (s) => s.put(l[1], l[0]));
+  await idbDo(db, 'readwrite', (s) => s.put(tree, 'tree')); db.close();
+}
+// Better still, the whole world (terrain included, about 70 MB) comes with the app as world.bin, made on a computer
+// by `npm run bake`: the page is opened with ?bake, generates the world as usual and posts it to the bake server.
+// The file is: the length of a JSON text (4 bytes, then 4 unused), the JSON (the tree, with { $: [offset, bytes,
+// type] } where an array was), padding to a multiple of 8, then the arrays, each at a multiple of 8.
+const BAKE = /[?&]bake\b/.test(location.search), pad8 = (n) => (n + 7) & ~7;
+async function worldPost(world) {
+  const parts = []; let off = 0;
+  const strip = (o) => { const r = Array.isArray(o) ? [] : {}; for (const k in o) { const v = o[k]; if (v && (ArrayBuffer.isView(v) || v instanceof ArrayBuffer)) { const b = ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : new Uint8Array(v); r[k] = { $: [off, b.length, v.constructor.name] }; parts.push(b, new Uint8Array(pad8(b.length) - b.length)); off += pad8(b.length); } else r[k] = v && typeof v === 'object' ? strip(v) : v; } return r; };
+  const json = new TextEncoder().encode(JSON.stringify({ key: worldKey, world: strip(world) }));
+  const r = await fetch('world', { method: 'POST', body: new Blob([Uint32Array.of(json.length, 0), json, new Uint8Array(pad8(json.length) - json.length), ...parts]) });
+  if (!r.ok) throw new Error('The bake server did not take the world.');
+}
+async function worldFile() {
+  const buf = await new Promise((ok) => { const x = new XMLHttpRequest(); x.open('GET', 'world.bin'); x.responseType = 'arraybuffer'; x.onload = () => ok(x.status === 200 || x.status === 0 ? x.response : null); x.onerror = () => ok(null); x.send(); });
+  if (!buf || buf.byteLength < 16) return null;
+  const n = new Uint32Array(buf, 0, 1)[0], tree = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, n))), base = 8 + pad8(n);
+  if (tree.key !== worldKey) return null; // made by another version of the generator
+  // small arrays are copied out, so that the file's memory can go once the big ones are on the graphics card
+  const fill = (o) => { for (const k in o) { const v = o[k]; if (v && typeof v === 'object') { if (v.$) { const C = v.$[2] === 'ArrayBuffer' ? Uint8Array : window[v.$[2]], a = new C(buf, base + v.$[0], v.$[1] / C.BYTES_PER_ELEMENT); o[k] = v.$[1] < 6e6 ? a.slice() : a; } else fill(v); } } return o; };
+  return fill(tree.world);
+}
+let saved = null;
+if (!BAKE) {
+  try { await say('Looking for the world…', 0.04, 300); saved = await worldFile() || await worldLoad(); } catch (e) { console.warn(e); }
+}
+
+const whole = !!(saved && saved.T); // the terrain came too (world.bin): nothing is left to generate
+await say(whole ? 'Unpacking the world…' : 'Sculpting the seabed…', whole ? 0.8 : saved ? 0.5 : 0.25, 1200);
 // marks a load in progress (quality.js); leaving the page before it ends is not a crash
 keep('abyssalGLLoad', 1);
 addEventListener('pagehide', () => keep('abyssalGLLoad', ''));
 let D;
-{
+if (!whole) {
   // the density grid, four z slices per draw (shaders.js: G_DENS), read back slice by slice
   const prims = primBuffer(), tP = tex(prims.length / 4, 1, gl.RGBA32F, { min: gl.NEAREST, mag: gl.NEAREST });
   gl.texSubImage2D(T2, 0, 0, 0, prims.length / 4, 1, gl.RGBA, gl.FLOAT, prims);
@@ -162,9 +218,9 @@ let D;
 }
 // Distance to the rock for collide(), in 1/127 m (> 0 in rock, clamped to ±1 m), kept only in the 4x4x4-voxel
 // bricks near the surface within the camera's reach (~2 MB). CI per brick: 0 all water, 1 all rock, n brick n-2 in CG.
-const CO = 52, CN = 102, CI = new Uint16Array(CN * CN * NY / 4);
-let CG = new Int8Array(64 * 65534);
-{
+const CO = 52, CN = 102;
+let CI = saved ? saved.CI : new Uint16Array(CN * CN * NY / 4), CG = saved ? saved.CG : new Int8Array(64 * 65534);
+if (!saved) {
   let n = 0;
   for (let bz = 0; bz < CN; bz++) for (let by = 1; by < NY / 4 - 1; by++) for (let bx = 0; bx < CN; bx++) {
     if (hypot(bx - CN / 2 + 0.5, bz - CN / 2 + 0.5) > 52) continue; // more than 156 m out: never reached
@@ -179,8 +235,8 @@ let CG = new Int8Array(64 * 65534);
   }
   CG = CG.slice(0, n * 64);
 }
-await say('Carving canyons…', 0.32, 400);
-const T = buildTerrain(D);
+if (!whole) await say('Carving canyons…', saved ? 0.8 : 0.32, 400);
+const T = whole ? saved.T : buildTerrain(D);
 
 // preset viewpoints (position, look-at), keys 1-6; the world generator dresses the scene around them
 const POSES = [
@@ -255,21 +311,66 @@ function flyAt() {
 for (let t = 0; t <= FLYT; t += 0.1) { F[FLT] = t; flyAt(); flyPts.push([F[CX], F[CY], F[CZ]]); }
 for (const p of POSES) flyPts.push([p[0], -40, p[2]]);
 
-await say('Growing kelp…', 0.73, 2500);
-const Wd = makeWorld(D, T, flyPts, POSES);
-for (const p of POSES) p[1] += Wd.gy(p[0], p[2]);
+// TV level: the terrain again from every 2nd voxel, a quarter of the triangles, for everything past 40 m. Built like
+// buildTerrain() in world.js: normals from the full-size density, quads bucketed into the culling grid.
+function farTerrain(D, smp) {
+  const nx = NX / 2, ny = NY / 2, nz = NZ / 2, d = new Float32Array(nx * ny * nz);
+  for (let z = 0, i = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++, i++) d[i] = D[2 * x + NX * (2 * y + NY * 2 * z)];
+  const sn = surfaceNets(d, nx, ny, nz), nv = sn.nv, vb = new ArrayBuffer(nv * 16), vf = new Float32Array(vb), v8 = new Int8Array(vb), C2 = CELLS * CELLS;
+  for (let k = 0; k < nv; k++) {
+    const x = sn.pos[k * 3] * 2, y = sn.pos[k * 3 + 1] * 2, z = sn.pos[k * 3 + 2] * 2, e = 1.6;
+    let ax = smp(x - e, y, z) - smp(x + e, y, z), ay = smp(x, y - e, z) - smp(x, y + e, z), az = smp(x, y, z - e) - smp(x, y, z + e);
+    const l = hypot(ax, ay, az) || 1; ax /= l; ay /= l; az /= l;
+    vf[k * 4] = OX + x * VS; vf[k * 4 + 1] = OY + y * VS; vf[k * 4 + 2] = OZ + z * VS;
+    v8[k * 16 + 12] = round(ax * 127); v8[k * 16 + 13] = round(ay * 127); v8[k * 16 + 14] = round(az * 127); v8[k * 16 + 15] = 127;
+  }
+  const nq = sn.ni / 6, key = new Uint8Array(nq), start = new Uint32Array(C2 + 1), lo = new Float32Array(C2).fill(1e9), hi = new Float32Array(C2).fill(-1e9);
+  for (let q = 0; q < nq; q++) {
+    const a = sn.idx[q * 6] * 4, c = clamp(floor((vf[a] - OX) / CELLW), 0, CELLS - 1) + CELLS * clamp(floor((vf[a + 2] - OZ) / CELLW), 0, CELLS - 1);
+    key[q] = c; start[c + 1]++;
+    for (let j = 0; j < 6; j++) { const y = vf[sn.idx[q * 6 + j] * 4 + 1]; if (y < lo[c]) lo[c] = y; if (y > hi[c]) hi[c] = y; }
+  }
+  for (let c = 0; c < C2; c++) start[c + 1] += start[c];
+  const ib = new Uint32Array(sn.ni), at = start.slice();
+  for (let q = 0; q < nq; q++) { const o = at[key[q]]++ * 6; for (let j = 0; j < 6; j++) ib[o + j] = sn.idx[q * 6 + j]; }
+  return { vb, ib, start, lo, hi };
+}
+if (LEAN && !whole) T.far = farTerrain(D, T.smp);
+
+if (!saved) await say('Growing kelp…', 0.73, 2500);
+const Wd = saved ? saved.Wd : makeWorld(D, T, flyPts, POSES);
+POSES.forEach((p, i) => { p[1] = saved ? saved.poseY[i] : p[1] + Wd.gy(p[0], p[2]); });
 D = Wd.gy = T.smp = null; // with gy goes the generator's working memory (about 200 MB)
 
-await say('Building set pieces…', 0.94, 1200);
+if (!saved) await say('Building set pieces…', 0.94, 1200);
 // mesh ids: 0-3 boulders, 4-6 sponges, 7-8 coral, 9 tube sponge, 10 whale fluke, 11 ship, 12 manta, 13 fish,
 // 14-20 rock chunks + pebbles, 21-22 coral LOD, 23-25 far LOD of the large rock chunks
-const meshes = [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22, 3),
-  meshLathe([[0, 0, 0.5], [0.34, 0, 0.6], [0.5, 0.2, 0.85], [0.6, 0.6, 1], [0.55, 0.95, 1], [0.47, 1.08, 1], [0.38, 1.1, 0.9], [0.3, 1.0, 0.45], [0.26, 0.6, 0.15], [0, 0.35, 0.05]], 18, 0.3, 9),
-  meshLathe([[0, 0, 0.5], [0.2, 0, 0.6], [0.26, 0.5, 0.85], [0.4, 1.25, 1], [0.4, 1.42, 1], [0.33, 1.48, 0.9], [0.26, 1.38, 0.4], [0.18, 0.8, 0.12], [0, 0.5, 0.05]], 16, 0.35, 8),
-  meshLathe([[0, 0, 0.5], [0.5, 0, 0.7], [0.72, 0.18, 1], [0.74, 0.38, 1], [0.62, 0.5, 0.9], [0.48, 0.42, 0.45], [0.4, 0.2, 0.15], [0, 0.14, 0.06]], 18, 0.25, 10),
+// the three sponges: profile, segments around, lumpiness, ribs
+const LATHE = [
+  [[[0, 0, 0.5], [0.34, 0, 0.6], [0.5, 0.2, 0.85], [0.6, 0.6, 1], [0.55, 0.95, 1], [0.47, 1.08, 1], [0.38, 1.1, 0.9], [0.3, 1.0, 0.45], [0.26, 0.6, 0.15], [0, 0.35, 0.05]], 18, 0.3, 9],
+  [[[0, 0, 0.5], [0.2, 0, 0.6], [0.26, 0.5, 0.85], [0.4, 1.25, 1], [0.4, 1.42, 1], [0.33, 1.48, 0.9], [0.26, 1.38, 0.4], [0.18, 0.8, 0.12], [0, 0.5, 0.05]], 16, 0.35, 8],
+  [[[0, 0, 0.5], [0.5, 0, 0.7], [0.72, 0.18, 1], [0.74, 0.38, 1], [0.62, 0.5, 0.9], [0.48, 0.42, 0.45], [0.4, 0.2, 0.15], [0, 0.14, 0.06]], 18, 0.25, 10],
+];
+const meshes = saved ? saved.meshes : [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22, 3),
+  meshLathe(...LATHE[0]),
+  meshLathe(...LATHE[1]),
+  meshLathe(...LATHE[2]),
   meshCoral(0), meshCoral(1), meshTubes()].map((m) => m.build());
-meshes.push(meshFluke(), meshShip().build(), meshManta().build(), meshFish().build(),
+if (!saved) meshes.push(meshFluke(), meshShip().build(), meshManta().build(), meshFish().build(),
   meshChunk(3).build(), meshChunk(11).build(), meshChunk(29).build(), meshChunk(5, 3).build(), meshChunk(17, 3).build(), meshChunk(41, 3).build(), meshChunk(9, 1).build(), meshCoral(0, 1).build(), meshCoral(1, 1).build(), meshChunk(5, 2, 1).build(), meshChunk(17, 2, 1).build(), meshChunk(41, 2, 1).build());
+if (BAKE) {
+  await say('Sending the world to the bake server…', 0.96, 1500);
+  await worldPost({ CI, CG, T: { vb: T.vb, ib: T.ib, start: T.start, lo: T.lo, hi: T.hi, far: T.far }, Wd, poseY: POSES.map((p) => p[1]), meshes: meshes.map((m) => ({ vb: m.vb, ib: m.ib, nv: m.nv })) });
+} else if (!saved) {
+  await say('Saving the world for next time…', 0.96, 1500);
+  try {
+    await worldSave({ CI, CG, Wd, poseY: POSES.map((p) => p[1]),
+      meshes: meshes.map((m) => ({ vb: m.vb, ib: m.ib, nv: m.nv })) });
+  } catch (e) { console.warn(e); try { indexedDB.deleteDatabase('abyssal'); } catch (e2) {} } // no room: generate again next time
+}
+// TV level: far versions of the four boulders (26-29) and of the three sponges (30-32), built on every start
+if (LEAN) meshes.push(meshChunk(1, 2, 1).build(), meshChunk(7, 2, 1).build(), meshChunk(13, 2, 1).build(), meshChunk(22, 2, 1).build(),
+  ...LATHE.map((l) => meshLathe(l[0], 8, l[2], 0).build()));
 let nV = 0, nI = 0;
 for (const m of meshes) { m.v0 = nV; m.i0 = nI; nV += m.nv; nI += m.ib.length; }
 const allV = new Uint8Array(nV * 16), allI = new Uint32Array(nI);
@@ -277,9 +378,54 @@ for (const m of meshes) { allV.set(new Uint8Array(m.vb), m.v0 * 16); allI.set(m.
 for (const m of meshes) for (let k = m.i0, e = k + m.ib.length; k < e; k++) allI[k] += m.v0; // no base vertex in WebGL2
 const vbMesh = vbuf(allV), ibMesh = ibuf(allI);
 const vbTerrain = vbuf(new Uint8Array(T.vb)), ibTerrain = ibuf(T.ib), nTerrain = T.ib.length;
+const vbFar = LEAN ? vbuf(new Uint8Array(T.far.vb)) : null, ibFar = LEAN ? ibuf(T.far.ib) : null;
+if (LEAN) T.far.vb = T.far.ib = 0;
 const nSolid = Wd.solids.data.length / 12;
 const solidData = new Float32Array((nSolid + 1) * 12); solidData.set(Wd.solids.data); solidData.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0], nSolid * 12);
 const ibSolids = vbuf(solidData);
+// ---------------------------------------------------------------- TV level: less geometry
+// The TV's graphics chip is limited by triangle count before pixel count, and most of the original's triangles do
+// not shrink with the draw distance. On the TV level the boulders (drawn everywhere, every frame, in the original)
+// are sorted into the culling grid and get a far version, as do the sponges; small rocks, pebbles and sponges keep
+// every 2nd instance, corals every 3rd, tube sponges every 4th, fish every 5th, glints every 8th, drifting particles every
+// 2nd; the terrain past 40 m is a coarser mesh (farTerrain);
+// rocks, sponges and corals are drawn to 3/4 and 2/3 of their distance (DF, PROPD); the terrain stops at 130 m (past
+// that the haze hides nearly all of it); and everything that stands on the terrain is drawn before it, so the
+// terrain behind is never shaded.
+const DF = LEAN ? 0.75 : 1;
+// every k-th element of `a` (elements of `stride` floats)
+const thin = (a, stride, k) => { const n = Math.ceil(a.length / stride / k), o = new Float32Array(n * stride); for (let i = 0; i < n; i++) for (let j = 0; j < stride; j++) o[i * stride + j] = a[i * k * stride + j]; return o; };
+// every k-th instance of each cell of a cell-sorted set (12 floats each)
+const thinCells = (c, k) => {
+  const st = new Uint32Array(c.start.length), o = new Float32Array(c.data.length); let n = 0;
+  for (let i = 0; i + 1 < c.start.length; i++) { st[i] = n; for (let j = c.start[i]; j < c.start[i + 1]; j += k) o.set(c.data.subarray(j * 12, j * 12 + 12), n++ * 12); }
+  st[c.start.length - 1] = n; c.start = st; c.data = o.subarray(0, n * 12); c.n = n;
+};
+// `n` instances from `first` of the set pieces, sorted into the culling grid like the rock chunks
+const cellSort = (first, n) => {
+  const C2 = CELLS * CELLS, cell = new Uint16Array(n), start = new Uint32Array(C2 + 1), lo = new Float32Array(C2).fill(1e9), hi = new Float32Array(C2).fill(-1e9), o = new Float32Array(n * 12);
+  let mar = 0;
+  for (let i = 0; i < n; i++) {
+    const k = (first + i) * 12, r = solidData[k + 3] * 1.6, y = solidData[k + 1];
+    const c = clamp(floor((solidData[k] - OX) / CELLW), 0, CELLS - 1) + CELLS * clamp(floor((solidData[k + 2] - OZ) / CELLW), 0, CELLS - 1);
+    cell[i] = c; start[c + 1]++; if (r > mar) mar = r; if (y - r < lo[c]) lo[c] = y - r; if (y + r > hi[c]) hi[c] = y + r;
+  }
+  for (let c = 0; c < C2; c++) start[c + 1] += start[c];
+  const at = start.slice();
+  for (let i = 0; i < n; i++) o.set(solidData.subarray((first + i) * 12, (first + i) * 12 + 12), at[cell[i]]++ * 12);
+  return { buf: vbuf(o), start, lo, hi, mar };
+};
+const boulders = LEAN ? [0, 1, 2, 3].map((i) => cellSort(Wd.solids.ranges[i][0], Wd.solids.ranges[i][1])) : null;
+if (LEAN) {
+  for (const i of [0, 1, 2]) thinCells(Wd.props[i], 2); for (const i of [3, 4]) thinCells(Wd.props[i], 3); thinCells(Wd.props[5], 4);
+  for (const i of [0, 1, 2, 6]) thinCells(Wd.chunks[i], 2);
+  // rocks carry the distance at which they have shrunk away (for materials 0 and 1, the 11th float)
+  for (const c of Wd.chunks) for (let k = 0; k < c.data.length; k += 12) if (c.data[k + 8] < 1.5 && c.data[k + 10] > 1.5) c.data[k + 10] *= DF;
+  Wd.fish = thin(Wd.fish, 8, 5); Wd.glints = thin(Wd.glints, 8, 8); Wd.snow = thin(Wd.snow, 4, 2);
+}
+// is set piece i (the whale fluke, the ship) in front of the camera? They are one big mesh each, drawn whole
+const ahead = (i) => { const k = Wd.solids.ranges[i][0] * 12, x = solidData[k] - RC[CX], y = solidData[k + 1] - RC[CY], z = solidData[k + 2] - RC[CZ]; return x * RC[FX] + y * RC[FY] + z * RC[FZ] > -45; };
+
 const ibChunk = Wd.chunks.map((c) => vbuf(c.data)), ibProp = Wd.props.map((c) => vbuf(c.data));
 const ibBig = vbuf(new Uint8Array(Wd.big.buf)), ibBigF = vbuf(new Uint8Array(Wd.bigF.buf)), ibSmall = vbuf(new Uint8Array(Wd.small.buf));
 const ibFish = vbuf(Wd.fish), ibManta = vbuf(Wd.mantas), ibBubbles = vbuf(Wd.bubbles), ibSnowB = vbuf(Wd.snow);
@@ -293,7 +439,8 @@ gl.bindTexture(T2, tMap); gl.texSubImage2D(T2, 0, 0, 0, 512, 512, gl.RGBA, gl.UN
 const UI = gl.UNSIGNED_INT, TRI = gl.TRIANGLES, STRIP = gl.TRIANGLE_STRIP;
 const elems = (b) => gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b);
 // `n` instances of a mesh, starting at instance `first` of `ib`
-const drawMesh = (m, ib, L, first, n) => { bindV(ib, L, first); gl.drawElementsInstanced(TRI, m.ib.length, UI, m.i0 * 4, n); };
+let nDraw = 0, nTri = 0; // draw calls and triangles of the frame, for measure()
+const drawMesh = (m, ib, L, first, n) => { nDraw++; nTri += m.ib.length / 3 * n; bindV(ib, L, first); gl.drawElementsInstanced(TRI, m.ib.length, UI, m.i0 * 4, n); };
 
 // ---------------------------------------------------------------- one-time bakes: detail texture, shadow map
 {
@@ -322,11 +469,15 @@ unit(0, tShadow); unit(1, tWater); unit(2, tDetail); unit(3, tVol, gl.TEXTURE_3D
 
 // ---------------------------------------------------------------- render targets (rebuilt on resize)
 // The scene is drawn at `pix` pixels and scaled up to the window. frame() tunes it and the draw distance scale `det`
-// for the target frame time TF (30 fps on a TV, 60 elsewhere); both start where the last visit left them.
-const PIXMAX = TV ? 1280 * 720 : 2560 * 1440, PIXMIN = TV ? 2e5 : mob ? 25e4 : 5e5, DETMIN = 0.4, TF = TV ? 1000 / 30 : 1000 / 60;
-let W = 0, H = 0, DW = 0, DH = 0, pix = +SV[1] || (TV ? 960 * 540 : LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = +SV[2] || 1, dynN = 0, dynT = 0, dynBad = 0, dynOk = 0, dynWait = 3;
+// for 60 fps; both start where the last visit left them. A TV has one known, slow graphics chip: there both are
+// fixed (480x270, 40%), and only the screensaver changes them.
+const PIXMAX = TV ? 1280 * 720 : 2560 * 1440, PIXMIN = TV ? 13e4 : mob ? 25e4 : 5e5, DETMIN = 0.4, TF = TV ? 1000 / 30 : 1000 / 60;
+let W = 0, H = 0, DW = 0, DH = 0, pix = TV ? 480 * 270 : +SV[1] || (LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = TV ? 0.4 : +SV[2] || 1, dynN = 0, dynT = 0, dynBad = 0, dynOk = 0, dynWait = 3;
 const NB = 6;
 let tRes, tDp, tRay, tRay2, fScene, fRay, fRay2, tBl = [], fBl = [], targets = [], fbos = [];
+// finished frames: three textures taking turns as A (the older one shown), B (the newer) and C (being drawn)
+let tF = [], fF = [], fA = 0, fB = 1, fC = 2, stepI = 0, tSt = [], fSt = [], saver = 0;
+let sceneFbo = null; // where the scene steps draw: fScene, or a background of the animated screensaver
 function resize() {
   DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio));
   const s = min(1, sqrt(pix / (DW * DH)));
@@ -340,7 +491,14 @@ function resize() {
   tRay = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST }); tRay2 = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST });
   tBl = []; for (let i = 0; i < NB; i++) tBl.push(tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR));
   fScene = fbo(tRes, tDp); fRay = fbo(tRay); fRay2 = fbo(tRay2); fBl = tBl.map((t) => fbo(t));
-  targets = [tRes, tDp, tRay, tRay2, ...tBl]; fbos = [fScene, fRay, fRay2, ...fBl];
+  tF = [0, 1, 2].map(() => tex(W, H, gl.RGBA8, { min: gl.NEAREST, mag: gl.NEAREST })); fF = tF.map((t) => fbo(t));
+  gl.clearColor(0, 0, 0, 1); for (const f of fF) { gl.bindFramebuffer(FB, f); gl.clear(gl.COLOR_BUFFER_BIT); }
+  stepI = 0; sceneFbo = fScene; // a frame in progress is abandoned
+  // animated screensaver: two backgrounds (colour + depth), the one on screen and the next one being drawn
+  tSt = []; fSt = [];
+  if (saver === 2) for (let i = 0; i < 2; i++) { const c = tex(W, H, HDR, { min: gl.NEAREST, mag: gl.NEAREST }), d = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST }); tSt.push(c, d); fSt.push(fbo(c, d)); }
+  unit(5, tDp);
+  targets = [tRes, tDp, tRay, tRay2, ...tBl, ...tF, ...tSt]; fbos = [fScene, fRay, fRay2, ...fBl, ...fF, ...fSt];
   unit(5, tDp);
   UB[52] = W; UB[53] = H; UB[54] = 1 / W; UB[55] = 1 / H;
 }
@@ -353,12 +511,13 @@ let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, kyl = 0, kyr = 0, wv
 let mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
 const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, RAYS = 0.54;
 const rowOrd = new Uint8Array(CELLS);
+const RC = new Float64Array(32); // the camera the frame in progress is drawn from: a copy of F taken when it began
 // Draws the cells of a cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for the
 // terrain) as merged runs, nearest rows first. indexed: 1 for the terrain's quads, a mesh for instances of it (from
 // the instance buffer `ib` with layout `L`), otherwise strips of `verts` vertices per instance.
 function drawCells(start, lo, hi, mar, indexed, verts, minD, maxD, ib, L) {
-  const cx = F[CX], cy = F[CY], cz = F[CZ], fx = F[FX], fy = F[FY], fz = F[FZ], rx = F[RX], rz = F[RZ], ux = F[UX], uy = F[UY], uz = F[UZ];
-  const ds = indexed === 1 ? 1 : det * det;
+  const cx = RC[CX], cy = RC[CY], cz = RC[CZ], fx = RC[FX], fy = RC[FY], fz = RC[FZ], rx = RC[RX], rz = RC[RZ], ux = RC[UX], uy = RC[UY], uz = RC[UZ];
+  const ds = indexed === 1 || verts < 0 ? 1 : det * det; // verts < 0: a mesh whose distances `det` leaves alone
   const tx = TANH * W / H, hw = CELLW * 0.5, ex = hw + mar, min2 = minD * minD * ds, max2 = maxD * maxD * ds;
   for (let k = 0; k < CELLS; k++) {
     const rw = rowOrd[k], row = rw * CELLS, pz = OZ + (rw + 0.5) * CELLW - cz, hz = max(abs(pz) - hw, 0);
@@ -377,13 +536,28 @@ function drawCells(start, lo, hi, mar, indexed, verts, minD, maxD, ib, L) {
       }
       if (v) { if (run < 0) run = c; } else if (run >= 0) {
         const a = start[run], n = start[c] - a;
-        if (n > 0) { if (indexed === 1) gl.drawElements(TRI, n * 6, UI, a * 24); else if (indexed) drawMesh(indexed, ib, L, a, n); else { bindV(ib, L, a); gl.drawArraysInstanced(STRIP, 0, verts, n); } }
+        if (n > 0) { if (indexed === 1) { nDraw++; nTri += n * 2; gl.drawElements(TRI, n * 6, UI, a * 24); } else if (indexed) drawMesh(indexed, ib, L, a, n); else { nDraw++; nTri += (verts - 2) * n; bindV(ib, L, a); gl.drawArraysInstanced(STRIP, 0, verts, n); } }
         run = -1;
       }
     }
   }
 }
-function render() {
+const terrain = () => {
+  gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+  bindV(vbTerrain, L_SOLIDV, 0); bindV(ibSolids, L_SOLIDI, nSolid); elems(ibTerrain);
+  if (!SK.terrain) drawCells(T.start, T.lo, T.hi, 1.5, 1, 0, 0, LEAN ? 40 : 240);
+  if (LEAN && !SK.terrain) { bindV(vbFar, L_SOLIDV, 0); elems(ibFar); drawCells(T.far.start, T.far.lo, T.far.hi, 1.5, 1, 0, 40, 130); }
+};
+// parts of the frame that measure() leaves out in turn
+const SK = { water: 0, terrain: 0, 'set pieces': 0, rocks: 0, plants: 0, fish: 0, leaves: 0, sprites: 0, shafts: 0, bloom: 0 };
+// A frame is drawn in STEPS ([rough cost in ms on the TV, what to do]): the camera and water texture, the scene
+// part by part (0 to 3 what stands still, then what moves), then the post passes into frame texture C. Every step
+// sets the state it needs, because the screensavers draw other things between them. render() runs them all and
+// shows the result at once.
+const flat = () => { gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); };
+// the camera at F into the frame's uniforms and RC
+function camera() {
+  // camera basis (right vector is horizontal)
   // camera basis (right vector is horizontal)
   const cx = F[CX], cy = F[CY], cz = F[CZ], pitch = F[PIT], yaw = F[YAW];
   const cp = cos(pitch), fy = sin(pitch), rx = cos(yaw), rz = sin(yaw), fx = cp * rz, fz = -cp * rx;
@@ -404,57 +578,109 @@ function render() {
   m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det;
   gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB);
   { let cr = floor((cz - OZ) / CELLW) | 0; cr = cr < 0 ? 0 : cr > CELLS - 1 ? CELLS - 1 : cr; let n = 0; rowOrd[n++] = cr; for (let d = 1; d < CELLS; d++) { if (cr - d >= 0) rowOrd[n++] = cr - d; if (cr + d < CELLS) rowOrd[n++] = cr + d; } }
-  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
-  // animated water texture + mips
-  gl.bindFramebuffer(FB, fWater); gl.viewport(0, 0, WATER, WATER); gl.useProgram(pWater); gl.uniform4f(uWater, F[TIME], 0, 0, 0); tri3();
+  RC.set(F);
+}
+// animated water texture + mips
+function waterTex() {
+  if (SK.water) return;
+  flat(); gl.bindFramebuffer(FB, fWater); gl.viewport(0, 0, WATER, WATER); gl.useProgram(pWater); gl.uniform4f(uWater, F[TIME], 0, 0, 0); tri3();
   unit(1, tWater); gl.generateMipmap(T2);
-  // scene
-  gl.bindFramebuffer(FB, fScene); gl.viewport(0, 0, W, H);
-  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.GREATER); gl.depthMask(true); gl.clearColor(0, 0, 0, 1); gl.clearDepth(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  gl.useProgram(pSolid); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
-  bindV(vbTerrain, L_SOLIDV, 0); bindV(ibSolids, L_SOLIDI, nSolid); elems(ibTerrain);
-  drawCells(T.start, T.lo, T.hi, 1.5, 1, 0, 0, 240);
-  gl.disable(gl.CULL_FACE); bindV(vbMesh, L_SOLIDV, 0); elems(ibMesh);
-  for (let i = 0; i < 12; i++) { const g = Wd.solids.ranges[i]; if (g[1]) drawMesh(meshes[i], ibSolids, L_SOLIDI, g[0], g[1]); }
-  for (let i = 0; i < NCHUNK; i++) {
-    const c = Wd.chunks[i], big = i > 2 && i < 6;
-    drawCells(c.start, c.lo, c.hi, 3, meshes[14 + i], 0, 0, i > 5 ? 30 : big ? 40 : 96, ibChunk[i], L_SOLIDI);
-    if (big) drawCells(c.start, c.lo, c.hi, 3, meshes[20 + i], 0, 40, 150, ibChunk[i], L_SOLIDI);
+}
+const scene = () => { gl.bindFramebuffer(FB, sceneFbo); gl.viewport(0, 0, W, H); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.GREATER); gl.depthMask(true); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); };
+const solids = () => { scene(); gl.useProgram(pSolid); bindV(vbMesh, L_SOLIDV, 0); elems(ibMesh); };
+const STEPS = [
+  [3, () => { camera(); flat(); nDraw = nTri = 0; waterTex(); scene(); gl.clearColor(0, 0, 0, 1); gl.clearDepth(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }],
+  [7, () => { // set pieces; everything that stands on the terrain comes before it, so the terrain behind is not shaded
+  solids();
+  if (!SK['set pieces']) {
+    for (let i = LEAN ? 4 : 0; i < 12; i++) { const g = Wd.solids.ranges[i]; if (g[1] && (i < 10 || ahead(i))) drawMesh(meshes[i], ibSolids, L_SOLIDI, g[0], g[1]); }
+    if (LEAN) for (let i = 0; i < 4; i++) {
+      const b = boulders[i];
+      drawCells(b.start, b.lo, b.hi, b.mar, meshes[i], -1, 0, 45, b.buf, L_SOLIDI);
+      drawCells(b.start, b.lo, b.hi, b.mar, meshes[26 + i], -1, 45, 200, b.buf, L_SOLIDI);
+    }
   }
-  for (let i = 0; i < 6; i++) {
+  }],
+  [9, () => { // rocks, sponges and corals
+  solids();
+  if (!SK.rocks) for (let i = 0; i < NCHUNK; i++) {
+    const c = Wd.chunks[i], big = i > 2 && i < 6;
+    drawCells(c.start, c.lo, c.hi, 3, meshes[14 + i], 0, 0, i > 5 ? 30 * DF : big ? 40 * DF : 96 * DF, ibChunk[i], L_SOLIDI);
+    if (big) drawCells(c.start, c.lo, c.hi, 3, meshes[20 + i], 0, 40 * DF, 150 * DF, ibChunk[i], L_SOLIDI);
+  }
+  if (!SK.plants) for (let i = 0; i < 6; i++) {
     const lod = i === 3 || i === 4, p = Wd.props[i];
+    if (LEAN) { // sponges: the far version from 10 m; corals have only the one
+      drawCells(p.start, p.lo, p.hi, 3, meshes[4 + i], 0, 0, i < 3 ? 10 : PROPD, ibProp[i], L_SOLIDI);
+      if (i < 3) drawCells(p.start, p.lo, p.hi, 3, meshes[30 + i], 0, 10, PROPD, ibProp[i], L_SOLIDI);
+      continue;
+    }
     drawCells(p.start, p.lo, p.hi, 3, meshes[4 + i], 0, 0, lod ? 6 : 110, ibProp[i], L_SOLIDI);
     if (lod) drawCells(p.start, p.lo, p.hi, 3, meshes[18 + i], 0, 6, 110, ibProp[i], L_SOLIDI);
   }
-  gl.useProgram(pManta); drawMesh(MANTA, ibManta, L_ANIM, 0, nManta);
-  gl.useProgram(pFish); drawMesh(FISH, ibFish, L_ANIM, 0, nFish);
-  // kelp and plants: 9-row blades up close, 5 rows mid-range, a decimated set far away
-  gl.useProgram(pLeaf); drawCells(Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 18, 0, 24, ibBig, L_LEAF);
-  gl.useProgram(pLeaf5); drawCells(Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 10, 24, 58, ibBig, L_LEAF);
-  gl.useProgram(pLeafF); drawCells(Wd.bigF.start, Wd.bigF.lo, Wd.bigF.hi, 5, false, 6, 58, 150, ibBigF, L_LEAF);
-  gl.useProgram(pLeafS); drawCells(Wd.small.start, Wd.small.lo, Wd.small.hi, 1.5, false, 6, 0, 70, ibSmall, L_LEAF);
-  gl.useProgram(pSurf); gl.drawArrays(STRIP, 0, 4);
-  gl.useProgram(pBack); gl.drawArrays(STRIP, 0, 4);
-  gl.enable(gl.BLEND); gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  gl.useProgram(pBub); bindV(ibBubbles, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nBub);
-  gl.blendFunc(gl.ONE, gl.ONE);
-  gl.useProgram(pGl); bindV(ibGl, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nGl);
-  gl.useProgram(pSnow); bindV(ibSnowB, L_SNOW, 0); gl.drawArraysInstanced(STRIP, 0, 4, nSnow);
-  gl.disable(gl.BLEND); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
-  // light shafts (half res), then their blur
-  gl.bindFramebuffer(FB, fRay); gl.viewport(0, 0, W / 2, H / 2); gl.useProgram(pRays); tri3();
-  gl.bindFramebuffer(FB, fRay2); gl.useProgram(pRB); unit(7, tRay); tri3();
-  // bloom: res -> b0 -> ... -> b5, then back up b5 -> b4 (additive) ... -> b0
-  for (let i = 0; i < NB; i++) {
-    gl.bindFramebuffer(FB, fBl[i]); gl.viewport(0, 0, max(1, W >> (i + 1)), max(1, H >> (i + 1)));
-    gl.useProgram(i ? pDown : pDown0); unit(6, i ? tBl[i - 1] : tRes); tri3();
+  }],
+  [9, () => { // terrain, and behind everything the background
+  scene(); gl.useProgram(pSolid); terrain();
+  gl.disable(gl.CULL_FACE); gl.useProgram(pBack); gl.depthFunc(gl.GEQUAL); gl.drawArrays(STRIP, 0, 4); gl.depthFunc(gl.GREATER);
+  }],
+  [8, () => { // mantas, fish, and the kelp up close: 9-row blades, 5 rows mid-range (the TV level: 5 and 3)
+  scene(); bindV(vbMesh, L_SOLIDV, 0); elems(ibMesh);
+  if (!SK.fish) {
+    gl.useProgram(pManta); drawMesh(MANTA, ibManta, L_ANIM, 0, nManta);
+    gl.useProgram(pFish); drawMesh(FISH, ibFish, L_ANIM, 0, nFish);
   }
-  gl.enable(gl.BLEND); gl.useProgram(pUp);
-  for (let i = NB - 1; i > 0; i--) { gl.bindFramebuffer(FB, fBl[i - 1]); gl.viewport(0, 0, max(1, W >> i), max(1, H >> i)); unit(6, tBl[i]); tri3(); }
-  gl.disable(gl.BLEND);
-  // composite
-  gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W, H); gl.useProgram(pPost); unit(6, tRes); unit(7, tRay2); unit(8, tBl[0]); tri3();
+  if (!SK.leaves) {
+    gl.useProgram(LEAN ? pLeaf5 : pLeaf); drawCells(Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, LEAN ? 10 : 18, 0, 24, ibBig, L_LEAF);
+    gl.useProgram(LEAN ? pLeafF : pLeaf5); drawCells(Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, LEAN ? 6 : 10, 24, 58, ibBig, L_LEAF);
+  }
+  }],
+  [5, () => { // kelp far away (a decimated set) and the small plants
+  scene();
+  if (!SK.leaves) {
+    gl.useProgram(pLeafF); drawCells(Wd.bigF.start, Wd.bigF.lo, Wd.bigF.hi, 5, false, 6, 58, 150, ibBigF, L_LEAF);
+    gl.useProgram(pLeafS); drawCells(Wd.small.start, Wd.small.lo, Wd.small.hi, 1.5, false, 6, 0, 70, ibSmall, L_LEAF);
+  }
+  }],
+  [6, () => { // water surface, sprites
+  scene();
+  gl.useProgram(pSurf); gl.drawArrays(STRIP, 0, 4);
+  if (!SK.sprites) {
+    gl.enable(gl.BLEND); gl.depthMask(false); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(pBub); bindV(ibBubbles, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nBub);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(pGl); bindV(ibGl, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nGl);
+    gl.useProgram(pSnow); bindV(ibSnowB, L_SNOW, 0); gl.drawArraysInstanced(STRIP, 0, 4, nSnow);
+    gl.disable(gl.BLEND); gl.depthMask(true);
+  }
+  }],
+  [4, () => { // light shafts (half res), then their blur
+  flat();
+  if (!SK.shafts) {
+    gl.bindFramebuffer(FB, fRay); gl.viewport(0, 0, W / 2, H / 2); gl.useProgram(pRays); tri3();
+    gl.bindFramebuffer(FB, fRay2); gl.useProgram(pRB); unit(7, tRay); tri3();
+  }
+  }],
+  [6, () => { // bloom: res -> b0 -> ... -> b5, then back up b5 -> b4 (additive) ... -> b0; then the composite into frame C
+  flat();
+  if (!SK.bloom) {
+    for (let i = 0; i < NB; i++) {
+      gl.bindFramebuffer(FB, fBl[i]); gl.viewport(0, 0, max(1, W >> (i + 1)), max(1, H >> (i + 1)));
+      gl.useProgram(i ? pDown : pDown0); unit(6, i ? tBl[i - 1] : tRes); tri3();
+    }
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.useProgram(pUp);
+    for (let i = NB - 1; i > 0; i--) { gl.bindFramebuffer(FB, fBl[i - 1]); gl.viewport(0, 0, max(1, W >> i), max(1, H >> i)); unit(6, tBl[i]); tri3(); }
+    gl.disable(gl.BLEND);
+  }
+  gl.bindFramebuffer(FB, fF[fC]); gl.viewport(0, 0, W, H); gl.useProgram(pPost); unit(6, tRes); unit(7, tRay2); unit(8, tBl[0]); tri3();
+  }],
+];
+// C is finished: it becomes B, the newer of the two frames shown
+const flip = () => { const a = fA; fA = fB; fB = fC; fC = a; };
+// puts frame A faded k of the way to frame B on the screen
+function present(k) {
+  flat(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W, H); gl.useProgram(pFade); gl.uniform1f(uFade, k); unit(6, tF[fA]); unit(7, tF[fB]); tri3();
 }
+function render() { for (const s of STEPS) s[1](); flip(); present(1); }
 
 // CS[j] = distance to the rock (metres, < 0 in water) at the camera + CE[3j..3j+2]: the camera, then ±0.375 m on
 // each axis for the gradient
@@ -485,21 +711,91 @@ function collide() {
   }
 }
 
-// ?bench in the address: bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
+// ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
-if (/[?&]bench\b/.test(location.search)) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
+let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
+if (debug) window.SK = SK;
+if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
-if (window.bench) window.state = () => ({ x: F[CX], y: F[CY], z: F[CZ], yaw: F[YAW], pitch: F[PIT], pOn, menu, auto, cruise, fast, W, H, det });
+if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
+if (window.bench) window.state = () => ({ x: F[CX], y: F[CY], z: F[CZ], yaw: F[YAW], pitch: F[PIT], pOn, menu, auto, cruise, fast, W, H, det, saver, svPhase, stepI, lvStep, lvHave, fadeAt, now: F[LAST], flt: F[FLT] });
 // the scripted flight (FLY) as an autopilot: one minute through the whole world, over and over
 const fly = (on) => { auto = on; F[FLT] = 0; cruise = 0; F[VX] = F[VY] = F[VZ] = 0; lkx = lky = l2x = l2y = mdx = mdy = 0; };
 const goTo = (i) => { fly(false); view = i; lookAt(...POSES[i]); };
 
+// Measure (the menu button, or P): times the frame as it is, then with each part left out in turn and at a quarter
+// of the pixels, and lists how long each loading stage took. The numbers stay on screen until Stats is toggled.
+let busy = false, fAvg = 0;
+// The two screensavers. Both show views from along the tour path at full draw distance, each faded in over SAVER_FADE.
+// 1, stills: 1920x1080 pictures, each drawn one step per display frame behind the one on screen, held SAVER_HOLD.
+// 2, animated: 1280x720. The parts of a view that do not move (terrain, rocks, sponges, corals, set pieces, the
+//    background) are drawn once into a background with its depth; every frame then starts from a copy of it and adds
+//    only what moves (fish, kelp, the water surface, bubbles and specks, light shafts). The light rippling over the
+//    rocks is part of the background, so it stands still. A view stays for LIVE_VIEW.
+const SAVER_FADE = 3000, SAVER_HOLD = 6000, LIVE_VIEW = 40000;
+let fadeAt = 0, hShown = 0, svPhase = 0, svPix = 0, svDet = 0; // phase: 0 pick the next view, 1 drawing it, 2 showing it
+let lvStep = 0, lvAt = 0, lvCur = 0, lvHave = false;
+const UBc = new Float32Array(60), RCc = new Float64Array(32), UBn = new Float32Array(60), RCn = new Float64Array(32); // the cameras of the view on screen and of the next
+function saverOn(mode) {
+  if (mode === saver || dead) return;
+  if (!saver) { svPix = pix; svDet = det; }
+  saver = mode; fly(false);
+  if (mode) { pix = min(mode > 1 ? 1280 * 720 : 1920 * 1080, DW * DH); det = 1; svPhase = 0; lvHave = false; fadeAt = -1e9; ui(false); } else { pix = svPix; det = svDet; lookAt(...POSES[view]); }
+  body.classList.toggle('s', !!mode); resize();
+}
+const nextView = () => { F[FLT] = (F[FLT] + 3.7) % FLYT; flyAt(); };
+function saverTick(now) {
+  if (svPhase === 0) { nextView(); stepI = 0; svPhase = 1; }
+  if (svPhase === 1) { STEPS[stepI++][1](); if (stepI === STEPS.length) { stepI = 0; flip(); fadeAt = now; svPhase = 2; hShown++; } }
+  else if (now - fadeAt > SAVER_FADE + SAVER_HOLD) svPhase = 0;
+}
+const useCam = (ub, rc) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
+function liveTick(now) {
+  if (svPhase === 0) { nextView(); lvStep = 0; svPhase = 1; }
+  if (svPhase === 1) { // the next view's background: steps 0 to 3, one per display frame, into the spare background
+    sceneFbo = fSt[1 - lvCur];
+    if (lvStep === 0) { STEPS[0][1](); UBn.set(UB); RCn.set(RC); } else { useCam(UBn, RCn); STEPS[lvStep][1](); }
+    sceneFbo = fScene;
+    if (++lvStep < 4) return; // (the view on screen holds still meanwhile)
+    // it becomes the view on screen: the last frame of the old one stays as A, and fades into the new frames
+    lvCur = 1 - lvCur; UBc.set(UBn); RCc.set(RCn); flip(); fadeAt = lvAt = now; lvHave = true; svPhase = 2;
+  }
+  if (!lvHave) return;
+  useCam(UBc, RCc); waterTex();
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fSt[lvCur]); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fScene);
+  gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+  for (let i = 4; i < STEPS.length; i++) STEPS[i][1]();
+  { const b = fB; fB = fC; fC = b; } hShown++; // the new frame is B; A is only seen during the fade
+  if (now - lvAt > LIVE_VIEW) svPhase = 0;
+}
+
+async function measure() {
+  if (busy) return; busy = true; hud = false;
+  const px = new Uint8Array(4), sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); // waits for the GPU
+  // [ms per frame, of which spent in this thread issuing the draw calls]
+  const run = (n) => { render(); sync(); const t = performance.now(); for (let i = 0; i < n; i++) render(); const js = performance.now() - t; sync(); return [(performance.now() - t) / n, js / n]; };
+  const out = [`${GPUNAME}  ·  ${['High', 'Medium', 'Low', 'TV'][LV]} detail`];
+  const show = async (l) => { out.push(l); info.textContent = out.join('\n') + (busy ? '\nmeasuring…' : ''); await tick(40); };
+  await show('loading: ' + stages.slice(0, -1).map((g, i) => `${g[0].replace('…', '')} ${((stages[i + 1][1] - g[1]) / 1000).toFixed(1)} s`).join(', '));
+  const n = max(4, min(60, round(2000 / run(3)[0]))), full = run(n); // about 2 s a run
+  await show(`${W}x${H}, draw distance ${det * 100 | 0}%: ${full[0].toFixed(1)} ms per frame (${full[1].toFixed(1)} ms issuing ${nDraw} draws, ${nTri / 1000 | 0}k triangles)  ·  on screen ${fAvg.toFixed(1)} ms`);
+  for (const k in SK) { SK[k] = 1; const r = run(n); SK[k] = 0; await show(`without ${k}: ${r[0].toFixed(1)} ms (${(full[0] - r[0]).toFixed(1)} less), ${nDraw} draws, ${nTri / 1000 | 0}k triangles`); }
+  const was = pix; pix = W * H / 4; resize(); const q = run(n);
+  await show(`at ${W}x${H}: ${q[0].toFixed(1)} ms (${(full[0] - q[0]).toFixed(1)} less)`);
+  for (const k in SK) SK[k] = 1; const bare = run(n); for (const k in SK) SK[k] = 0;
+  await show(`at that size with every part left out: ${bare[0].toFixed(1)} ms`);
+  pix = was; resize(); const again = run(n); busy = false;
+  await show(`as it is, measured again: ${again[0].toFixed(1)} ms`);
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dtr = now - F[LAST]; F[LAST] = now;
+  if (busy) return; // measure() is drawing
+  if (dtr < 1e3) fAvg += (dtr - fAvg) * 0.05;
   let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
   // Dynamic resolution for the target frame time: every second (0.4 s behind the menu) scale the load by k
-  if (dtr < 1e3 && (dynT += dtr) > 0 && (dynN++, dynT > (menu ? 400 : 1000))) {
+  if (!TV && !saver && dtr < 1e3 && (dynT += dtr) > 0 && (dynN++, dynT > (menu ? 400 : 1000))) {
     const a = dynT / dynN; let k = 1;
     // slow for two periods in a row means fewer pixels, and twice as long before trying to go back up
     if (a > TF * 1.055) { dynOk = 0; if (++dynBad > 1) { k = TF * 0.9 / a; dynBad = 0; dynWait = min(dynWait * 2, 60); } }
@@ -515,7 +811,8 @@ function frame(now) {
     dynN = dynT = 0; resize();
   }
   F[TIME] += dt;
-  if (auto) { F[FLT] += dt; if (F[FLT] >= FLYT) F[FLT] = 0; flyAt(); }
+  if (saver === 1) saverTick(now); else if (saver === 2) liveTick(now);
+  else if (auto) { F[FLT] += dt; if (F[FLT] >= FLYT) F[FLT] = 0; flyAt(); }
   else {
     // touch: holding the finger away from where it went down keeps turning, like a joystick
     if (tId >= 0) {
@@ -544,11 +841,12 @@ function frame(now) {
     F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
     collide();
   }
-  render();
+  if (saver) present(min(1, (now - fadeAt) / SAVER_FADE));
+  else { render(); hShown++; }
   if (hud) {
     hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
     F[HUDT] += dtr / 1000;
-    if (F[HUDT] > 0.5) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; }
+    if (F[HUDT] > 0.5) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps${saver ? ` (screensaver: ${(hShown / F[HUDT]).toFixed(1)} new frames a second)` : ''}  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; hShown = 0; }
   }
 }
 
@@ -565,6 +863,7 @@ if (window.bench) window.step = (n = 1, ms = 33) => { for (let t = F[LAST]; n-- 
 //   red             the autopilot tour           green          next viewpoint
 //   yellow          stats                        blue           swim faster
 //   Back            menu (from the menu: leave the app)
+// The screensavers are buttons in the menu; G (or Play on a remote) starts the animated one, T the stills.
 const sound = () => 0; // the soundscape is not ported yet
 const held = new Uint8Array(512); // remotes repeat keydown without marking it as a repeat
 const key = (e, v) => {
@@ -580,6 +879,9 @@ const key = (e, v) => {
       else if (c === 70 || c === 403) fly(!auto);
       else if (c === 404) goTo((view + 1) % 6);
       else if (c === 406) fast ^= 1;
+      else if (c === 80) measure();
+      else if (c === 71 || c === 415) saverOn(2);
+      else if (c === 84) saverOn(1);
       else if (c >= 49 && c <= 54) goTo(c - 49);
     }
   }
@@ -587,8 +889,9 @@ const key = (e, v) => {
 };
 addEventListener('keydown', (e) => {
   const c = e.keyCode;
+  if (saver) { if (c === 72 || c === 405) key(e, 1); else { saverOn(0); if (c === 27 || c === 461) ui(true); } e.preventDefault(); return; } // any key ends the screensaver
   if (!menu) { key(e, 1); if (TV) e.preventDefault(); return; }
-  if (c === 72 || c === 405) key(e, 1); // behind the menu only the stats key works
+  if (c === 72 || c === 405 || c === 80) key(e, 1); // behind the menu only the stats and measure keys work
   else if (c >= 37 && c <= 40) { // the arrows move between the menu's buttons
     const b = Array.from(document.querySelectorAll('#g button')), i = b.indexOf(document.activeElement);
     b[(i + (c < 39 ? b.length - 1 : 1)) % b.length].focus(); e.preventDefault();
@@ -597,7 +900,7 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => key(e, 0));
 const release = () => { kf = kb = kl = kr = ku = kd = ks = kyl = kyr = 0; tId = -1; tN = 0; pOn = false; held.fill(0); };
 const capture = () => { const p = canvas.requestPointerLock({ unadjustedMovement: true }); if (p && p.catch) p.catch(() => canvas.requestPointerLock()).catch(() => 0); };
-canvas.addEventListener('click', () => { if (TV) cruise ^= 1; else capture(); });
+canvas.addEventListener('click', () => { if (saver) saverOn(0); else if (TV) cruise ^= 1; else capture(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement === canvas) { mdx += e.movementX; mdy += e.movementY; }
   else if (TV) { pjx = e.clientX / innerWidth * 2 - 1; pjy = e.clientY / innerHeight * 2 - 1; pOn = true; pT = performance.now(); }
@@ -630,15 +933,34 @@ const ui = (m) => {
   if (m) { release(); for (const t of [100, 1000]) setTimeout(() => menu && document.activeElement === body && bDive.focus(), t); } else document.activeElement.blur();
 };
 const go = () => { ui(false); bDive.textContent = 'Resume'; if (!TV && !mob) capture(); };
-bDive.onclick = go; $('o').onclick = () => ui(true);
+bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => saverOn(2); $('u').onclick = () => saverOn(1);
 // detail buttons: the current level is lit, the others reload the page with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 3 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssalGL', 3 - i); location.reload(); }; });
-document.addEventListener('pointerlockchange', () => { if (!TV) ui(!document.pointerLockElement); });
+document.addEventListener('pointerlockchange', () => { if (!TV && !saver) ui(!document.pointerLockElement); });
+
+// ---------------------------------------------------------------- webOS: keep the TV's own screensaver away
+// webOS asks every registered app before it starts its screensaver (after a couple of minutes without a key press);
+// answering "ack: false" stops it. This scene keeps moving, so it never needs one.
+{
+  const Bridge = window.WebOSServiceBridge || window.PalmServiceBridge;
+  if (Bridge) try {
+    const name = 'com.abyssalgarden.webgl', ask = new Bridge();
+    ask.onservicecallback = (m) => {
+      try {
+        const r = JSON.parse(m);
+        if (r.timestamp) new Bridge().call('luna://com.webos.service.tvpower/power/responseScreenSaverRequest', JSON.stringify({ clientName: name, ack: false, timestamp: r.timestamp }));
+      } catch (e) {}
+    };
+    ask.call('luna://com.webos.service.tvpower/power/registerScreenSaverRequest', JSON.stringify({ subscribe: true, clientName: name }));
+    window.addEventListener('unload', () => ask.cancel && ask.cancel());
+  } catch (e) { console.warn(e); }
+}
 
 // draw the first frame and wait for the GPU to finish it (programs get compiled on first use) before the reveal
 lookAt(...POSES[0]);
 await say('Letting the light in…', 1, 400);
 render(); gl.finish();
+stages.push(['', performance.now()]);
 setTimeout(keep, 15e3, 'abyssalGLLoad', ''); // the load counts as survived after 15 s of frames
 ui(true);
 requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); });

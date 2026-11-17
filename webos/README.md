@@ -28,6 +28,16 @@ npm run build
 This writes the app folder to `app/` and the installable package to `dist/com.abyssalgarden.webgl_0.1.0_all.ipk`.
 `npm run build:readable` leaves the script unminified.
 
+To have the TV skip world generation, generate the world on this computer first:
+
+```bash
+npm run bake
+```
+
+That opens the app in headless Chrome, saves the generated world as `world.bin` (about 70 MB) and rebuilds with it
+packed in, which makes the package about 37 MB. Later `npm run build` runs keep packing it for as long as the
+generator (`../source/src/math.js` and `world.js`) is unchanged.
+
 ## Install on a rooted TV
 
 Install the `.ipk` with whichever tool you already use: webOS Dev Manager, `ares-install`, or by hand over SSH.
@@ -56,6 +66,21 @@ ssh root@TV_ADDRESS "luna-send -i luna://com.webos.appInstallService/dev/install
 | Blue | Swim faster |
 | Back | Menu; from the menu, leaves the app |
 
+The menu also has three buttons:
+
+- **Screensaver** is animated. For each view along the tour path it draws everything that stands still (terrain,
+  rocks, sponges, corals) once into a background, then every frame adds only what moves: kelp, fish, bubbles, the
+  water surface and the light shafts. On an LG CX that runs at 15 frames a second at 1280×720 with full draw
+  distance. The light rippling over the rocks is part of the background, so it holds still. A view stays for 40
+  seconds. `Play` on the remote starts it too.
+- **Stills** shows 1920×1080 pictures instead, each drawn in the background and faded in over the last (about one
+  every ten seconds).
+
+  Any key ends either one.
+- **Measure speed** times the frame with each part left out in turn, and lists how long loading took.
+
+While the app is open it tells webOS not to start its own screensaver.
+
 ## Try it on a computer
 
 Serve `app/` from any web server and open it in Chrome. It uses keyboard and mouse as the original does
@@ -63,11 +88,26 @@ Serve `app/` from any web server and open it in Chrome. It uses keyboard and mou
 
 - `?tv` uses the TV level and the TV controls.
 - `?lv=0` to `?lv=3` forces a detail level (High, Medium, Low, TV).
-- `?bench` adds three console helpers: `bench(n)` draws `n` frames flat out and returns milliseconds per frame,
+- `?bench` adds console helpers: `bench(n)` draws `n` frames flat out and returns milliseconds per frame,
   `state()` returns the camera and input state, and `step(n, ms)` runs `n` frames by hand.
 
 ## How the TV level differs
 
-It keeps one leaf, glint and pebble in eight, uses the Low level's coarser meshes and single-tap shadows, takes
-8 light-shaft steps instead of 12, starts at 960×540 and aims for 30 fps rather than 60. Resolution and draw
-distance still adjust themselves to hold that rate.
+The LG CX has a Mali-G51 graphics chip, which is limited by triangle count as much as by pixels. The TV level:
+
+- keeps one leaf in eight, and thins rocks, sponges, corals, fish and glints further;
+- sorts the boulders into the culling grid and gives them, the sponges and the far terrain coarser versions;
+- uses a rock shader with 13 texture samples instead of 27, and 8 light-shaft steps instead of 12;
+- renders at a fixed 480×270 with 40% draw distance (the screensaver uses 1920×1080 and full distance).
+
+Measured on the TV, that is about 17 scene frames a second, up from 6 for the unmodified Low level.
+
+## Loading
+
+Generating the world takes nearly three minutes on the TV. There are two ways around it:
+
+- **Baked world** (`npm run bake`, above): the whole world ships in the package and the TV only unpacks it. Measured
+  on the LG CX, loading takes about 5 seconds.
+- **Without it**, the app keeps the slow parts of the world it generated (plants, rocks, meshes, collision grid:
+  about 35 MB) in IndexedDB after the first launch, and later launches take about 30 seconds. The terrain mesh is
+  rebuilt every time, because a webOS app only gets 50 MB of storage.

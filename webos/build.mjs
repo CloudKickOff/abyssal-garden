@@ -2,9 +2,10 @@
 //   npm run build            minified
 //   npm run build:readable   unminified, for debugging
 // The world generator and the maths come unchanged from ../source/src; quality, shaders and main are this port's.
-import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transformSync } from 'esbuild';
@@ -14,7 +15,11 @@ const FILES = [path.join(here, 'src', 'quality.js'), path.join(up, 'math.js'), p
 const readable = process.argv.includes('--readable');
 const TARGET = 'chrome68'; // the web engine of webOS TV 5
 
-const js = FILES.map((f) => readFileSync(f, 'utf8')).join('\n');
+const src = FILES.map((f) => readFileSync(f, 'utf8')).join('\n');
+// BUILD names the generator (math.js + world.js): the world saved on the device (main.js) is reused only by builds
+// with the same one. Generation code in main.js and the density shader are covered by WORLDV in main.js instead.
+const BUILD = createHash('sha1').update(readFileSync(FILES[1])).update(readFileSync(FILES[3])).digest('hex').slice(0, 12);
+const js = `const BUILD = '${BUILD}';\n` + src;
 const tpl = readFileSync(path.join(here, 'template.html'), 'utf8');
 // everything runs inside one async function; startup errors are shown on screen
 const wrap = (body) => `(async()=>{${body}\n})().catch(e=>{console.error(e);document.body.className='l e';document.getElementById('s').textContent=(e.cause?'':'Failed to start: ')+e.message});`;
@@ -26,7 +31,18 @@ html = html.replace('/*SCRIPT*/', () => code);
 const app = path.join(here, 'app'), dist = path.join(here, 'dist');
 mkdirSync(app, { recursive: true }); mkdirSync(dist, { recursive: true });
 writeFileSync(path.join(app, 'index.html'), html);
-for (const f of ['appinfo.json', 'icon.png', 'largeIcon.png']) copyFileSync(path.join(here, f), path.join(app, f));
+const PACK = ['index.html', 'appinfo.json', 'icon.png', 'largeIcon.png'];
+for (const f of PACK.slice(1)) copyFileSync(path.join(here, f), path.join(app, f));
+// world.bin (npm run bake): the generated world, packed too if this build's generator made it (it starts with the
+// length of a JSON text whose "key" is BUILD:WORLDV:level)
+rmSync(path.join(app, 'world.bin'), { force: true });
+const world = path.join(here, 'world.bin');
+if (existsSync(world)) {
+  const fd = openSync(world, 'r'), head = Buffer.alloc(256); readSync(fd, head, 0, 256, 0); closeSync(fd);
+  const key = (/"key":"([^"]*)"/.exec(head.toString('latin1', 8)) || [])[1], want = `${BUILD}:${/const WORLDV = (\d+)/.exec(src)[1]}:3`;
+  if (key === want) { copyFileSync(world, path.join(app, 'world.bin')); PACK.push('world.bin'); console.log(`app/world.bin: ${(statSync(world).size / 1048576).toFixed(1)} MB`); }
+  else console.log(`world.bin is from another generator (${key}, this one is ${want}): left out. Run \`npm run bake\` again.`);
+}
 console.log(`app/index.html: ${(html.length / 1024).toFixed(1)} kB${readable ? ' (readable)' : ''}`);
 
 // ---------------------------------------------------------------- .ipk
@@ -38,7 +54,7 @@ rmSync(tmp, { recursive: true, force: true });
 const appDir = path.join(tmp, 'data', 'usr', 'palm', 'applications', id), pkgDir = path.join(tmp, 'data', 'usr', 'palm', 'packages', id);
 mkdirSync(appDir, { recursive: true }); mkdirSync(pkgDir, { recursive: true }); mkdirSync(path.join(tmp, 'control'));
 let size = 0;
-for (const f of ['index.html', 'appinfo.json', 'icon.png', 'largeIcon.png']) { copyFileSync(path.join(app, f), path.join(appDir, f)); size += statSync(path.join(app, f)).size; }
+for (const f of PACK) { copyFileSync(path.join(app, f), path.join(appDir, f)); size += statSync(path.join(app, f)).size; }
 writeFileSync(path.join(pkgDir, 'packageinfo.json'), JSON.stringify({ app: id, id, loc_name: info.title, package_format_version: 2, vendor: info.vendor, version: info.version }, null, 2) + '\n');
 writeFileSync(path.join(tmp, 'control', 'control'), [`Package: ${id}`, `Version: ${info.version}`, 'Section: misc', 'Priority: optional', 'Architecture: all',
   `Installed-Size: ${size}`, 'Maintainer: N/A <nobody@example.com>', 'Description: Abyssal Garden, a procedural underwater world', 'webOS-Package-Format-Version: 2', 'webOS-Packager-Version: x.y.x', ''].join('\n'));
@@ -54,4 +70,4 @@ for (const n of ['debian-binary', 'control.tar.gz', 'data.tar.gz']) {
 const ipk = path.join(dist, `${id}_${info.version}_all.ipk`);
 writeFileSync(ipk, Buffer.concat(parts));
 rmSync(tmp, { recursive: true, force: true });
-console.log(`dist/${path.basename(ipk)}: ${(statSync(ipk).size / 1024).toFixed(1)} kB`);
+console.log(`dist/${path.basename(ipk)}: ${(statSync(ipk).size / 1048576).toFixed(2)} MB`);

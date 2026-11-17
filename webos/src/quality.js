@@ -14,4 +14,7 @@ try { SV = (localStorage.abyssalGL || '').split(','); bad = localStorage.abyssal
 { const q = /[?&]lv=(\d)/.exec(location.search); if (q) SV = [q[1]]; }
 LV = SV[0] ? +SV[0] : TV ? 3 : mob ? (mem > 7 ? 1 : 2) : mem <= 4 ? 2 : 0;
 if (bad && LV < 3) { SV = [++LV]; keep('abyssalGL', LV); }
+// LEAN: the TV level also draws less geometry (main.js) and uses a cheaper rock shader (shaders.js)
+const LEAN = LV > 2;
+const PROPD = 75; // TV level: sponges and corals shrink away by this distance (times the draw distance scale)
 const THIN = 1 << LV, SHADOW = LV ? 2048 : 4096, WATER = LV > 1 ? 256 : 512, RAYN = LV > 2 ? 8 : LV > 1 ? 12 : 34;
