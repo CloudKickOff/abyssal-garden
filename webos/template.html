@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>Abyssal Garden</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+/* Written for the Chromium 68 of webOS TV 5: no clamp(), inset, flex gap or :focus-visible.
+   The class on <body> is the state of the page:
+   l = loading, m = menu, g = in the scene (g p while the mouse is captured), l e = failed to start.
+   <html class=tv> when running on a TV. */
+html { background: #03131c; }
+body {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%; margin: 0; overflow: hidden;
+  background: radial-gradient(#0b3a4d, #03131c 70%);
+  font: 700 calc(.7vw + .9vh)/1.4 sans-serif; color: #e8fbff;
+  -webkit-user-select: none; user-select: none;
+}
+@media (max-width: 800px) { body { font-size: 13px; } }
+
+/* the scene: dimmed behind the menu (and blurred, but not on a TV: too slow), comes into focus when you dive */
+canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair;
+  transition: filter 1s, transform 1s, opacity 2s;
+}
+body:not(.g) canvas { filter: blur(1vmax) brightness(.5); transform: scale(1.06); }
+.tv body:not(.g) canvas { filter: none; transform: none; opacity: .45; }
+.tv canvas { transition: opacity 1s; }
+.l canvas, .tv .l canvas { opacity: 0; }
+
+/* menu: the loading bar and the buttons share one grid cell, so nothing jumps when they swap */
+#m {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: grid; place-content: center; justify-items: center;
+  grid-gap: 2.2em; padding: 1em 1em 4.5em; text-align: center; background: radial-gradient(#03131c00 30%, #03131ccc);
+  transition: opacity .5s, visibility .5s;
+}
+.g #m, .m #l, .l #g { opacity: 0; visibility: hidden; }
+h1 {
+  margin: 0; font: 900 4.4em/1 sans-serif; letter-spacing: .05em; text-transform: uppercase;
+  color: #0000; background: linear-gradient(#fff 25%, #7ff3ff 60%, #14a9c4);
+  -webkit-background-clip: text; background-clip: text; filter: drop-shadow(0 .06em .2em #000c);
+}
+p { margin: 0; }
+#a { display: grid; width: 30em; max-width: 100%; }
+#a > * { grid-area: 1/1; transition: opacity .8s, visibility .8s; }
+#s, #q, #k, #f { font-size: .8em; letter-spacing: .12em; text-transform: uppercase; }
+
+/* loading bar */
+#p {
+  height: .5em; margin: .4em 0 1em; overflow: hidden; border-radius: 1em; background: #03131c;
+  box-shadow: 0 0 0 2px #7ff3ff80, 0 0 1.5em #14a9c4;
+}
+#b {
+  display: block; height: 100%; background: linear-gradient(90deg, #14a9c4, #9ff6ff);
+  transform: scaleX(0); transform-origin: 0; will-change: transform;
+}
+.e #p { visibility: hidden; }
+.e #s { font-size: 1em; letter-spacing: 0; text-transform: none; white-space: pre-wrap; text-align: left; }
+
+/* buttons */
+button {
+  padding: .8em 1.4em; border: 0; border-radius: .5em; background: #fff; box-shadow: inset 0 -.2em #0003, 0 .3em 1em #0009;
+  font: 800 1em/1.2 sans-serif; letter-spacing: .12em; text-transform: uppercase;
+  color: #03222d; cursor: pointer; transition: transform .12s, filter .12s;
+}
+button:hover { transform: translateY(-.12em); filter: brightness(1.15); }
+button:active { transform: translateY(.1em); filter: brightness(.9); }
+button:focus { outline: 3px solid #fff; outline-offset: 3px; }
+#g { display: grid; grid-gap: 1.2em; }
+#d {
+  padding: .9em; background: linear-gradient(#9ff6ff, #19c3d6); font-size: 1.3em;
+  box-shadow: inset 0 -.2em #0003, 0 0 2em #19c3d6b3;
+}
+#f { position: absolute; left: 0; right: 0; bottom: 1.8em; color: #7ff3ff; opacity: .7; }
+
+/* dark plates under the dive button: detail level, list of controls */
+#q, #k { border-radius: .7em; background: #03131cb3; }
+
+/* detail level: buttons in a row, the current one lit */
+#q { display: flex; align-items: center; padding: .4em; }
+#q span { flex: 1; color: #7ff3ff; }
+#q button { flex: 1; margin-left: .4em; padding: .7em 0; background: none; box-shadow: none; color: #e8fbff; }
+#q button:hover, #q button:focus { background: #7ff3ff33; }
+#q .on { background: linear-gradient(#9ff6ff, #19c3d6); box-shadow: inset 0 -.2em #0003; color: #03222d; pointer-events: none; }
+
+/* list of controls: key caps right-aligned against their labels; one list for a keyboard, one for a TV remote */
+#k { padding: 1em 1.6em; }
+#k p { display: grid; grid-template-columns: auto auto; justify-content: center; align-items: center; grid-gap: .55em .9em; text-align: left; }
+#k i { display: flex; justify-self: end; align-items: center; font-style: normal; }
+#k b {
+  min-width: 1.1em; margin-left: .25em; padding: .2em .5em; border-radius: .35em; background: #e8fbff;
+  box-shadow: inset 0 -.15em #0004; color: #03222d; text-align: center;
+}
+#k b.r { background: #e2433f; color: #fff; } #k b.gr { background: #3fae52; color: #fff; }
+#k b.y { background: #e8c53a; } #k b.bl { background: #3f78e2; color: #fff; }
+.tv #k .kb, html:not(.tv) #k .rc { display: none; }
+@media (max-height: 30em) { #k { display: none; } }
+
+/* in the scene: a small menu button (hidden while the mouse is captured, Esc does the same) and the stats line */
+#o {
+  position: absolute; top: .6em; right: .6em; display: none; padding: .3em .6em; background: #03222dd9;
+  box-shadow: inset 0 0 0 2px #7ff3ff, 0 .3em 1em #0009; font-size: 1.3em; color: #e8fbff; opacity: .8;
+}
+.g #o { display: block; }
+.p #o { display: none; }
+#i {
+  position: absolute; top: 1em; left: 1.2em; margin: 0; font: .8em/1.6 monospace;
+  white-space: pre-wrap; text-shadow: 0 1px 4px #000; pointer-events: none;
+}
+</style>
+</head>
+<body class=l>
+<canvas id=c></canvas>
+<div id=m>
+  <h1>Abyssal Garden</h1>
+  <div id=a>
+    <div id=l><div id=p><i id=b></i></div><p id=s>Diving…</p></div>
+    <div id=g>
+      <button id=d>Dive in</button>
+      <p id=q><span>Detail</span><button>TV</button><button>Low</button><button>Medium</button><button>High</button></p>
+      <div id=k>
+        <p class=kb>
+          <i><b>W</b><b>A</b><b>S</b><b>D</b></i>Swim
+          <i><b>Q</b><b>E</b></i>Down / up
+          <i><b>Shift</b></i>Faster
+          <i><b>1</b>–<b>6</b></i>Viewpoints
+          <i><b>F</b></i>Autopilot tour
+          <i><b>Esc</b></i>Menu
+          <i><b>H</b></i>Stats
+        </p>
+        <p class=rc>
+          <i><b>Pointer</b></i>Look around
+          <i><b>▲</b><b>▼</b></i>Swim forward / back
+          <i><b>◀</b><b>▶</b></i>Turn
+          <i><b>OK</b></i>Keep swimming
+          <i><b>Wheel</b></i>Up / down
+          <i><b class=r>Red</b></i>Autopilot tour
+          <i><b class=gr>Green</b></i>Next viewpoint
+          <i><b class=y>Yellow</b></i>Stats
+          <i><b class=bl>Blue</b></i>Faster
+          <i><b>Back</b></i>Menu
+        </p>
+      </div>
+    </div>
+  </div>
+  <p id=f>Abyssal Garden by Noniv · WebGL2 port for webOS TV</p>
+</div>
+<button id=o aria-label=Menu>≡</button>
+<pre id=i></pre>
+<script>
+/*SCRIPT*/
+</script>
+</body>
+</html>

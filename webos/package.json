@@ -1,0 +1,13 @@
+{
+  "name": "abyssal-garden-webos",
+  "private": true,
+  "description": "WebGL2 port of Abyssal Garden, packaged as a webOS TV app",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:readable": "node build.mjs --readable"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

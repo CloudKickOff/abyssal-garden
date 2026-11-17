@@ -1,0 +1,14 @@
+{
+  "id": "com.abyssalgarden.webgl",
+  "version": "0.1.0",
+  "vendor": "Abyssal Garden",
+  "type": "web",
+  "main": "index.html",
+  "title": "Abyssal Garden",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#03131c",
+  "iconColor": "#03131c",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}
