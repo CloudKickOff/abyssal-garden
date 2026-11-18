@@ -862,23 +862,23 @@ const goTo = (i) => { fly(false); view = i; lookAt(...POSES[i]); };
 
 // Amount of life, 0 to 1 (a setting): the share of the fish, sharks, turtles and squid that is drawn.
 let LIFE = 0.7;
-// Squid hang in the water where they will be seen: one 11 m in front of each numbered viewpoint, and three beside
-// the tour path, 9 m off it (the tour passes without disturbing them). When the camera comes within 7 m one lets
-// go a cloud of ink and darts off; half a minute later it swims back home. x, y, z; heading; speed; t: seconds of
+// Squid hang in the water where they will be seen: one 11 m in front of viewpoints 1 and 4, and two beside the
+// tour path, 9 m off it (the tour passes without disturbing them). When the camera comes within 7 m one darts off,
+// three times in ten leaving a cloud of ink; half a minute later it swims back home. x, y, z; heading; speed; t: seconds of
 // flight left; w: seconds until it heads home; ph: phase of its drift; ox, oy, oz: home.
 const SQUID = [];
 {
   const add = (x, y, z) => SQUID.push({ x, y, z, ox: x, oy: y, oz: z, hx: 1, hy: 0, hz: 0, v: 0, t: 0, w: 0, ph: SQUID.length * 2.1 });
-  for (const p of POSES) { const dx = p[3] - p[0], dy = p[4] - p[1], dz = p[5] - p[2], l = hypot(dx, dy, dz); add(p[0] + dx / l * 11, min(-6, p[1] + dy / l * 11 + 0.8), p[2] + dz / l * 11); }
-  for (const k of [4, 11, 19]) { const a = k * 6, dx = FLY[a + 6] - FLY[a], dz = FLY[a + 8] - FLY[a + 2], l = hypot(dx, dz) || 1; add(FLY[a] - dz / l * 9, FLY[a + 1] + 1.5, FLY[a + 2] + dx / l * 9); }
+  for (const p of [POSES[0], POSES[3]]) { const dx = p[3] - p[0], dy = p[4] - p[1], dz = p[5] - p[2], l = hypot(dx, dy, dz); add(p[0] + dx / l * 11, min(-6, p[1] + dy / l * 11 + 0.8), p[2] + dz / l * 11); }
+  for (const k of [4, 19]) { const a = k * 6, dx = FLY[a + 6] - FLY[a], dz = FLY[a + 8] - FLY[a + 2], l = hypot(dx, dz) || 1; add(FLY[a] - dz / l * 9, FLY[a + 1] + 1.5, FLY[a + 2] + dx / l * 9); }
 }
 const INK = [], INKB = new Float32Array(64 * 8); let nInk = 0; // ink blobs: x, y, z, their drift, age, life, size
 function squidTick(dt) {
   for (let i = 0, n = ceil(SQUID.length * LIFE); i < n; i++) {
     const q = SQUID[i], dx = q.x - F[CX], dy = q.y - F[CY], dz = q.z - F[CZ], d = sqrt(dx * dx + dy * dy + dz * dz);
-    if (q.t <= 0 && d < 7 && !saver) { // off it goes, away from the camera and a little upwards, the ink left where it was
+    if (q.t <= 0 && d < 7 && !saver) { // off it goes, away from the camera and a little upwards; the ink, if any, stays where it was
       const l = sqrt(dx * dx + dz * dz) || 1; q.hx = dx / l * 0.94; q.hz = dz / l * 0.94; q.hy = 0.34; q.v = 8; q.t = 5;
-      for (let k = 0; k < 16 && INK.length < 64; k++) INK.push([q.x + rr(-0.4, 0.4), q.y + rr(-0.4, 0.4), q.z + rr(-0.4, 0.4), rr(-0.5, 0.5), rr(-0.2, 0.5), rr(-0.5, 0.5), 0, rr(7, 12), rr(0.5, 1.1)]);
+      if (Math.random() < 0.3) for (let k = 0; k < 16 && INK.length < 64; k++) INK.push([q.x + rr(-0.4, 0.4), q.y + rr(-0.4, 0.4), q.z + rr(-0.4, 0.4), rr(-0.5, 0.5), rr(-0.2, 0.5), rr(-0.5, 0.5), 0, rr(7, 12), rr(0.5, 1.1)]);
     }
     const ex = q.ox - q.x, ey = q.oy - q.y, ez = q.oz - q.z, el = sqrt(ex * ex + ey * ey + ez * ez);
     if (q.t > 0) { q.t -= dt; q.v *= exp(-dt * 0.9); q.w = 30; } // fleeing
