@@ -610,10 +610,13 @@ void main() {
   else if (sp < 5.5) { alb = mix(vec3f(.95), vec3f(.02), ss(.45, .7, sin(x * 10. + 2.) * .5 + .5)); alb = mix(alb, vec3f(1., .8, .08), ss(-.3, -.45, x)); }
   else { alb = mix(vec3f(1., .4, .28), vec3f(1., .68, .15), s); }
   alb *= .8 + .4 * s;
+  alb = mix(alb, vec3f(1.), .3 * ss(.02, -.1, y)); // a paler belly
   vec3 E = sunE(i.wp.y, z) * i.lt;
   vec3 lt = E * (.25 + .75 * sat(dot(n, L))) + amb(i.wp, n, vv.g, z) * 1.3;
-  // (like the corals: the blue-green light that falls on them comes back in their own colour, or the reds would be mud)
-  vec3 c = alb * (lt * .3 + 1.5 * dot(lt, vec3f(.1, .5, .5)));
+  // (like the corals: the blue-green light that falls on them comes back in their own colour, or the reds would be
+  // mud; shaded by how the skin faces the light from above, so that the body reads as round)
+  float sh = .28 + .72 * pow(sat(dot(n, normalize(L + vec3f(0., .7, 0.))) * .5 + .5), 1.6);
+  vec3 c = alb * (lt * .3 + 1.5 * sh * dot(lt, vec3f(.1, .5, .5)));
   c += E * pow(sat(dot(n, normalize(V + L))), 24.) * 1.6 + vec3f(.3, .6, .7) * pow(1. - sat(dot(n, V)), 3.) * .25 * vv.g;
   oc = fin(fog(c, i.wp, z));
 }

@@ -88,7 +88,7 @@ The menu also has a row of buttons:
   | Picture (TV) | 480×270 at 15 frames a second, 640×360 at 12, or 720×405 at 10 |
   | Draw distance (TV) | How far kelp and rocks are drawn |
   | Self-tuning (TV) | Lowers the draw distance when frames come late, and raises it again when they don't |
-  | Sharpen when still (TV) | After a second at rest, redraws the view at 1280×720 with full draw distance, the way the screensaver does, until you move |
+  | Sharpen when still (TV) | After a second at rest, redraws the view at 1280×720 the way the screensaver does (rocks and corals at full distance, kelp as far as before), at a steady 12 frames a second, until you move |
   | Stats line | Frame rate, resolution and graphics chip. It costs frames on a TV; leave it off except to check |
 
 - **Measure speed** times the frame with each part left out in turn, and lists how long loading took.
@@ -96,7 +96,8 @@ The menu also has a row of buttons:
 ## What lives there
 
 Beyond the original's mantas and its fish (twice the size here, to be seen across a room, and each school painted as
-a reef species: clownfish, yellow and blue tangs, royal gramma, parrotfish, a banded one, anthias), this port adds sharks and
+a reef species: clownfish, yellow and blue tangs, royal gramma, parrotfish, a banded one, anthias; and each of the
+original's twelve big schools split into three smaller shoals on paths of their own), this port adds sharks and
 turtles on wide looping paths, and squid that hang near the tour path: come within 7 m and one leaves a cloud of ink
 and darts away.
 

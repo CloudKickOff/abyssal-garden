@@ -498,8 +498,23 @@ const ibBig = vbuf(new Uint8Array(Wd.big.buf)), ibBigF = vbuf(new Uint8Array(Wd.
 // ---------------------------------------------------------------- more life
 // The original's fish are 30 cm long and hard to see on a TV across a room: here they are twice the size, and their
 // order is shuffled so that drawing only the first part of them (the Life setting) thins every school alike.
+// Each of the original's twelve big schools also becomes three smaller shoals: every 2nd and 3rd fish of it moves
+// to a path of its own some 30 to 50 m away (another radius, height, direction and species), so that there are
+// fewer fish in one place and more places with fish.
 {
-  const f = Wd.fish, n = f.length / 8, o = new Float32Array(f.length);
+  const f = Wd.fish, n = f.length / 8, o = new Float32Array(f.length), hh = (v) => { const x = sin(v * 91.7) * 43758.5453; return x - floor(x); };
+  let school = -1, k = 0, px = 1e9, pz = 1e9;
+  for (let i = 0; i < n; i++) {
+    const a = i * 8;
+    if (f[a] !== px || f[a + 2] !== pz) { school++; k = 0; px = f[a]; pz = f[a + 2]; }
+    const sub = k++ % 3;
+    if (sub) {
+      const id = school * 3 + sub, an = hh(id) * TAU, di = 30 + hh(id + 0.5) * 20, R = f[a + 3] * (0.7 + 0.5 * hh(id + 0.2));
+      let x = f[a] + cos(an) * di, z = f[a + 2] + sin(an) * di; const l = hypot(x, z); if (l > 120) { x *= 120 / l; z *= 120 / l; }
+      f[a + 5] *= f[a + 3] / R * (hh(id + 0.7) < 0.5 ? -1 : 1); f[a] = x; f[a + 2] = z; f[a + 3] = R;
+      f[a + 1] = clamp(f[a + 1] + (hh(id + 0.3) - 0.5) * 16, -40, -14); f[a + 7] = hh(id + 0.9);
+    }
+  }
   for (let i = 0; i < n; i++) { const j = i * 7919 % n; o.set(f.subarray(j * 8, j * 8 + 8), i * 8); o[i * 8 + 6] *= 2; }
   Wd.fish = o;
 }
@@ -833,7 +848,8 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.tuning = () => ({ tune, det, tuneN, tuneSlip }); window.audio = () => ({ AC, OUT, muted }); window.look = (...a) => { saverOn(0); fly(false); lookAt(...a); }; window.squid = () => SQUID;
+if (debug) { window.SK = SK; window.pace = (ms, st) => { PACE = ms; if (st !== undefined) STILL_PACE = st; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.tuning = () => ({ tune, det, tuneN, tuneSlip });
+  window.fishPos = (i) => { const f = Wd.fish, a = i * 8, R = f[a + 3], hx = ((x) => x - floor(x))(sin(f[a + 4] * 127.1) * 43758.5453), ta = F[TIME] * f[a + 5] + f[a + 7] * 6.3 + (hx - 0.5) * (26 / R); return [f[a] + R * cos(ta), f[a + 1] + 2.2 * sin(3 * ta + f[a + 7] * 17), f[a + 2] + R * 0.6 * sin(ta), floor(f[a + 7] * 7)]; }; window.audio = () => ({ AC, OUT, muted }); window.look = (...a) => { saverOn(0); fly(false); lookAt(...a); }; window.squid = () => SQUID;
   window.where = (set, i) => { const a = set === 1 ? TURTLES : SHARKS, o = i * 8, R = a[o + 3], ta = F[TIME] * a[o + 5] + a[o + 7] * 6.3; return [a[o] + R * cos(ta), a[o + 1] + 1.5 * sin(2 * ta + a[o + 7] * 17), a[o + 2] + R * 0.75 * sin(ta)]; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
@@ -901,7 +917,7 @@ function saverTick(now) {
   if (svPhase === 1) { STEPS[stepI++][1](); if (stepI === STEPS.length) { stepI = 0; flip(); fadeAt = now; svPhase = 2; hShown++; } }
   else if (now - fadeAt > SAVER_FADE + SAVER_HOLD) svPhase = 0;
 }
-const useCam = (ub, rc) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; tint(UB); gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
+const useCam = (ub, rc, d) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; if (d) UB[58] = d; tint(UB); gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
 function liveTick(now) {
   if (svPhase === 0) { if (saver < 3) nextView(); lvStep = 0; svPhase = 1; }
   if (svPhase === 1) { // the next view's background: steps 0 to 3, one per display frame, into the spare background
@@ -915,13 +931,17 @@ function liveTick(now) {
     gl.blitFramebuffer(0, 0, WATER, WATER, 0, 0, WATER, WATER, gl.COLOR_BUFFER_BIT, gl.NEAREST); unit(8, tWater0); gl.generateMipmap(T2);
   }
   if (!lvHave) return;
-  useCam(UBc, RCc); waterTex();
+  // a still view draws what moves (the kelp, mostly) only as far as the moving picture did: at full distance the
+  // kelp alone took a third of the frame on the TV, and the view stuttered
+  const d0 = det; if (saver > 2) det = svDet;
+  useCam(UBc, RCc, det); waterTex();
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fSt[lvCur]); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fScene);
   gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
   // the rippling light: multiplies the copy, reading the background's own depth
   flat(); gl.bindFramebuffer(FB, fScene); gl.viewport(0, 0, W, H); gl.enable(gl.BLEND); gl.blendFunc(gl.DST_COLOR, gl.ZERO);
   gl.useProgram(pRipple); unit(5, tSt[lvCur * 2 + 1]); unit(8, tWater0); tri3(); gl.disable(gl.BLEND); unit(5, tDp);
   for (let i = 4; i < STEPS.length; i++) STEPS[i][1]();
+  det = d0;
   { const b = fB; fB = fC; fC = b; } hShown++; // the new frame is B; A is only seen during the fade
   if (saver < 3 && now - lvAt > LIVE_VIEW) svPhase = 0;
 }
@@ -948,11 +968,12 @@ async function measure() {
 // On a TV a frame takes about 75 ms at 640x360, between four and five refreshes of its 60 Hz display, so frames
 // would come unevenly. PACE holds every frame for five refreshes: a steady 12 a second looks smoother. (Measured on
 // an LG CX: 480x270 fits four refreshes, 15 a second; 720x405 needs six.)
+let STILL_PACE = 78; // the same for a still view (5 refreshes)
 let PACE = TV ? 78 : 0, tuneN = 0, tuneSlip = 0, tuneT = 0, tuneOk = 0;
 const ft = []; // (debug) the last frame intervals
 function frame(now) {
   requestAnimationFrame(frame);
-  if (PACE && !saver && now - F[LAST] < PACE) return; // too early: this refresh keeps the last frame
+  if (PACE && (saver ? saver > 2 && STILL_PACE : PACE) && now - F[LAST] < (saver ? STILL_PACE : PACE)) return; // too early: this refresh keeps the last frame
   const dtr = now - F[LAST]; F[LAST] = now;
   if (debug) { ft.push(dtr); if (ft.length > 400) ft.shift(); }
   // Self-tuning (a setting, on a TV): every 3 s, if more than one frame in eight came later than its slot the draw
