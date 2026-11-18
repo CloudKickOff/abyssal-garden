@@ -118,6 +118,7 @@ const pWater = prog(G_FSV, G_WATER), uWater = gl.getUniformLocation(pWater, 'tm'
 const pDown0 = prog(G_FSV, G_DOWN0), pDown = prog(G_FSV, G_DOWN), pUp = prog(G_FSV, G_UP);
 const pRays = prog(G_FSV, G_RAYS), pRB = prog(G_FSV, G_RBLUR), pPost = prog(G_FSV, G_POST);
 const pFade = prog(G_FSV, G_FADE), uFade = gl.getUniformLocation(pFade, 'k'), pRipple = prog(G_FSV, G_RIPPLE);
+const pBig = prog(G_FSV, G_BIG), uBig = gl.getUniformLocation(pBig, 'sz'), pAA = prog(G_FSV, G_AA);
 
 // ---------------------------------------------------------------- sun + shadow matrix
 const SUN = (() => { const v = [0.27, 1, -0.24], l = hypot(...v); return v.map((c) => c / l); })();
@@ -495,6 +496,11 @@ const NB = 6;
 let tRes, tDp, tRay, tRay2, fScene, fRay, fRay2, tBl = [], fBl = [], targets = [], fbos = [];
 // finished frames: three textures taking turns as A (the older one shown), B (the newer) and C (being drawn)
 let tF = [], fF = [], fA = 0, fB = 1, fC = 2, stepI = 0, tSt = [], fSt = [], saver = 0;
+// The TV's interactive picture is small (480x270). Rather than let the TV stretch it over the screen, the canvas is
+// UP times that size and present() enlarges the frame onto it: first an edge-smoothing pass at the frame's own size
+// (FXAA: the small picture's stair-stepped edges are what shows most when it is enlarged), then a bicubic filter
+// with SHARP of sharpening.
+let UP = TV ? 4 : 1, SHARP = 0.35, SMOOTH = true, UPN = 1, tAA = null, fAA = null; // UPN: the factor in use (1 in the screensavers, which draw at full size)
 let sceneFbo = null; // where the scene steps draw: fScene, or a background of the animated screensaver
 function resize() {
   DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio));
@@ -502,21 +508,22 @@ function resize() {
   const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
   if (w === W && h === H) return;
   dynN = 0; dynT = -300; // let the new size settle before measuring again
-  W = w; H = h; canvas.width = W; canvas.height = H;
+  W = w; H = h; UPN = saver ? 1 : UP; canvas.width = W * UPN; canvas.height = H * UPN;
   for (const t of targets) gl.deleteTexture(t);
   for (const f of fbos) gl.deleteFramebuffer(f);
   tRes = tex(W, H, HDR); tDp = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST });
   tRay = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST }); tRay2 = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST });
   tBl = []; for (let i = 0; i < NB; i++) tBl.push(tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR));
   fScene = fbo(tRes, tDp); fRay = fbo(tRay); fRay2 = fbo(tRay2); fBl = tBl.map((t) => fbo(t));
-  tF = [0, 1, 2].map(() => tex(W, H, gl.RGBA8, { min: gl.NEAREST, mag: gl.NEAREST })); fF = tF.map((t) => fbo(t));
+  tF = [0, 1, 2].map(() => tex(W, H, gl.RGBA8)); fF = tF.map((t) => fbo(t));
   gl.clearColor(0, 0, 0, 1); for (const f of fF) { gl.bindFramebuffer(FB, f); gl.clear(gl.COLOR_BUFFER_BIT); }
   stepI = 0; sceneFbo = fScene; // a frame in progress is abandoned
   // animated screensaver: two backgrounds (colour + depth), the one on screen and the next one being drawn
   tSt = []; fSt = [];
   if (saver === 2) for (let i = 0; i < 2; i++) { const c = tex(W, H, HDR, { min: gl.NEAREST, mag: gl.NEAREST }), d = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST }); tSt.push(c, d); fSt.push(fbo(c, d)); }
   unit(5, tDp);
-  targets = [tRes, tDp, tRay, tRay2, ...tBl, ...tF, ...tSt]; fbos = [fScene, fRay, fRay2, ...fBl, ...fF, ...fSt];
+  tAA = tex(W, H, gl.RGBA8); fAA = fbo(tAA);
+  targets = [tRes, tDp, tRay, tRay2, ...tBl, ...tF, ...tSt, tAA]; fbos = [fScene, fRay, fRay2, ...fBl, ...fF, ...fSt, fAA];
   unit(5, tDp);
   UB[52] = W; UB[53] = H; UB[54] = 1 / W; UB[55] = 1 / H;
 }
@@ -696,7 +703,12 @@ const STEPS = [
 const flip = () => { const a = fA; fA = fB; fB = fC; fC = a; };
 // puts frame A faded k of the way to frame B on the screen
 function present(k) {
-  flat(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W, H); gl.useProgram(pFade); gl.uniform1f(uFade, k); unit(6, tF[fA]); unit(7, tF[fB]); tri3();
+  flat(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W * UPN, H * UPN);
+  if (UPN > 1) {
+    if (SMOOTH) { gl.bindFramebuffer(FB, fAA); gl.viewport(0, 0, W, H); gl.useProgram(pAA); unit(7, tF[fB]); tri3(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W * UPN, H * UPN); }
+    gl.useProgram(pBig); gl.uniform4f(uBig, W, H, SHARP, UPN); unit(7, SMOOTH ? tAA : tF[fB]); tri3(); return;
+  }
+  gl.useProgram(pFade); gl.uniform1f(uFade, k); unit(6, tF[fA]); unit(7, tF[fB]); tri3();
 }
 function render() { for (const s of STEPS) s[1](); flip(); present(1); }
 
@@ -732,7 +744,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; }
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });

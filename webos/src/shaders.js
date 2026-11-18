@@ -911,3 +911,47 @@ void main() {
   oc = vec4(vec3(mix(1., clamp(f, .5, 2.2), lit * .75)), 1.);
 }
 `;
+
+// The screen, enlarged sz.w times: frame B (tR, sz.xy pixels, bilinear) through a Catmull-Rom filter (the 5 bilinear
+// taps that carry nearly all of its weight), then sharpened by sz.z against the average of four taps around the
+// point, limited to the range of those taps so that edges get no halo.
+const G_BIG = GH + `
+uniform sampler2D tR;
+uniform vec4 sz;
+out vec4 oc;
+void main() {
+  vec2 px = 1. / sz.xy, sp = gl_FragCoord.xy / sz.w, tc = floor(sp - .5) + .5, f = sp - tc;
+  vec2 w0 = f * (-.5 + f * (1. - .5 * f)), w1 = 1. + f * f * (-2.5 + 1.5 * f), w2 = f * (.5 + f * (2. - 1.5 * f)), w3 = f * f * (-.5 + .5 * f);
+  vec2 w12 = w1 + w2, t12 = (tc + w2 / w12) * px, t0 = (tc - 1.) * px, t3 = (tc + 2.) * px;
+  vec3 c = texture(tR, t12).rgb * (w12.x * w12.y) + texture(tR, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y) + texture(tR, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)
+         + texture(tR, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y) + texture(tR, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);
+  c /= w12.x * w12.y + (w0.x + w3.x) * w12.y + w12.x * (w0.y + w3.y);
+  vec2 uv = sp * px;
+  vec3 a = texture(tR, uv + px * vec2(-.75, -.75)).rgb, b = texture(tR, uv + px * vec2(.75, -.75)).rgb, d = texture(tR, uv + px * vec2(-.75, .75)).rgb, e = texture(tR, uv + px * vec2(.75, .75)).rgb;
+  vec3 lo = min(min(a, b), min(d, e)), hi = max(max(a, b), max(d, e));
+  c = clamp(c + (c - (a + b + d + e) * .25) * sz.z, min(lo, c) - .03, max(hi, c) + .03);
+  oc = vec4(c, 1.);
+}
+`;
+
+// Edge smoothing (FXAA, the short form): where the brightness of the four diagonal neighbours says an edge runs
+// through this pixel, blend along it. tR must be bilinear.
+const G_AA = GH + `
+uniform sampler2D tR;
+out vec4 oc;
+void main() {
+  vec2 px = 1. / vec2(textureSize(tR, 0)), uv = gl_FragCoord.xy * px;
+  const vec3 L = vec3(.299, .587, .114);
+  float nw = dot(texture(tR, uv + vec2(-1., -1.) * px).rgb, L), ne = dot(texture(tR, uv + vec2(1., -1.) * px).rgb, L);
+  float sw = dot(texture(tR, uv + vec2(-1., 1.) * px).rgb, L), se = dot(texture(tR, uv + vec2(1., 1.) * px).rgb, L);
+  vec3 m = texture(tR, uv).rgb; float lm = dot(m, L);
+  float lo = min(lm, min(min(nw, ne), min(sw, se))), hi = max(lm, max(max(nw, ne), max(sw, se)));
+  vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+  float red = max((nw + ne + sw + se) * .03125, .0078125);
+  dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + red), -8., 8.) * px;
+  vec3 a = .5 * (texture(tR, uv + dir * (1. / 3. - .5)).rgb + texture(tR, uv + dir * (2. / 3. - .5)).rgb);
+  vec3 b = a * .5 + .25 * (texture(tR, uv + dir * -.5).rgb + texture(tR, uv + dir * .5).rgb);
+  float lb = dot(b, L);
+  oc = vec4(lb < lo || lb > hi ? a : b, 1.);
+}
+`;
