@@ -62,7 +62,7 @@ ssh root@TV_ADDRESS "luna-send -i luna://com.webos.appInstallService/dev/install
 | Wheel, Channel up / down | Up / down |
 | Red | Autopilot tour: one minute through the whole world, on a loop |
 | Green | Next viewpoint |
-| Yellow | Stats: frame rate, resolution, graphics chip |
+| Yellow | Light colour: cool, warm, golden hour |
 | Blue | Swim faster |
 | Back | Menu; from the menu, leaves the app |
 
@@ -70,17 +70,33 @@ The menu also has a row of buttons:
 
 - **Screensaver** is animated. For each view along the tour path it draws everything that stands still (terrain,
   rocks, sponges, corals) once into a background, then every frame adds only what moves: kelp, fish, bubbles, the
-  water surface and the light shafts, plus a pass that makes the light on the rocks ripple. On an LG CX that runs
-  at about 15 frames a second at 1280×720 with full draw distance (about 9 at 1920×1080). A view stays for 40
+  water surface and the light shafts, plus a pass that makes the light on the rocks ripple. A view stays for 40
   seconds. `Play` on the remote starts it too.
 - **Stills** shows 1920×1080 pictures instead, each drawn in the background and faded in over the last (about one
-  every ten seconds).
+  every ten seconds). Any key ends either one.
+- **Settings** opens a panel of sliders and switches, kept between launches. Left and right on the remote change
+  the highlighted one:
 
-  Any key ends either one.
-- **Sound** turns the soundscape on and off (`M` on a keyboard).
-- **Golden hour** lets the light drift from its usual colour to a warm late-afternoon one and back, every five
-  minutes.
+  | Setting | What it does |
+  |---|---|
+  | Light shafts | Strength of the shafts of light, which also read as haze |
+  | Warmth | From the original's blue towards a warmer white balance |
+  | Golden hour | Lets the light drift to a warm late-afternoon colour and back every five minutes |
+  | Life | How many of the fish, sharks, turtles and squid are drawn |
+  | Sound | The soundscape |
+  | Picture (TV) | 480×270 at 15 frames a second, 640×360 at 12, or 720×405 at 10 |
+  | Draw distance (TV) | How far kelp and rocks are drawn |
+  | Self-tuning (TV) | Lowers the draw distance when frames come late, and raises it again when they don't |
+  | Sharpen when still (TV) | After a second at rest, redraws the view at 1280×720 with full draw distance, the way the screensaver does, until you move |
+  | Stats line | Frame rate, resolution and graphics chip. It costs frames on a TV; leave it off except to check |
+
 - **Measure speed** times the frame with each part left out in turn, and lists how long loading took.
+
+## What lives there
+
+Beyond the original's fish (twice the size here, to be seen across a room) and mantas, this port adds sharks and
+turtles on wide looping paths, and squid that hang near the tour path: come within 7 m and one leaves a cloud of ink
+and darts away.
 
 While the app is open it tells webOS not to start its own screensaver.
 

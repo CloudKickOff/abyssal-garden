@@ -568,9 +568,10 @@ function resize() {
   const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
   if (w === W && h === H) return;
   dynN = 0; dynT = -300; // let the new size settle before measuring again
+  const oldT = tF[fB], oldF = fF[fB], ow = W, oh = H; // the frame on screen: it is copied into the new frames below
   W = w; H = h; UPN = saver || UP < 2 ? 1 : max(1, 1080 / H); canvas.width = round(W * UPN); canvas.height = round(H * UPN);
-  for (const t of targets) gl.deleteTexture(t);
-  for (const f of fbos) gl.deleteFramebuffer(f);
+  for (const t of targets) if (t !== oldT) gl.deleteTexture(t);
+  for (const f of fbos) if (f !== oldF) gl.deleteFramebuffer(f);
   tRes = tex(W, H, HDR); tDp = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST });
   tRay = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST }); tRay2 = tex(W / 2, H / 2, HDR, { min: gl.NEAREST, mag: gl.NEAREST });
   tBl = []; for (let i = 0; i < NB; i++) tBl.push(tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR));
@@ -580,12 +581,18 @@ function resize() {
   stepI = 0; sceneFbo = fScene; // a frame in progress is abandoned
   // animated screensaver: two backgrounds (colour + depth), the one on screen and the next one being drawn
   tSt = []; fSt = [];
-  if (saver === 2) for (let i = 0; i < 2; i++) { const c = tex(W, H, HDR, { min: gl.NEAREST, mag: gl.NEAREST }), d = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST }); tSt.push(c, d); fSt.push(fbo(c, d)); }
+  if (oldT) { // so that a change of size (a screensaver, sharpening a still view) shows no black frame
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, oldF);
+    for (const i of [fA, fB]) { gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fF[i]); gl.blitFramebuffer(0, 0, ow, oh, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR); }
+    gl.deleteTexture(oldT); gl.deleteFramebuffer(oldF);
+  }
+  if (saver >= 2) for (let i = 0; i < 2; i++) { const c = tex(W, H, HDR, { min: gl.NEAREST, mag: gl.NEAREST }), d = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST }); tSt.push(c, d); fSt.push(fbo(c, d)); }
   unit(5, tDp);
   tAA = tex(W, H, gl.RGBA8); fAA = fbo(tAA);
   targets = [tRes, tDp, tRay, tRay2, ...tBl, ...tF, ...tSt, tAA]; fbos = [fScene, fRay, fRay2, ...fBl, ...fF, ...fSt, fAA];
   unit(5, tDp);
   UB[52] = W; UB[53] = H; UB[54] = 1 / W; UB[55] = 1 / H;
+  if (oldT) present(1); // resizing the canvas blanked it: show the frame carried over at once
 }
 resize();
 addEventListener('resize', resize);
@@ -602,7 +609,6 @@ let RAYS = TV ? 0.26 : 0.54; // strength of the light shafts (less on a TV: at i
 // the sun's colour and the final grade (G_POST). WARM is where it rests; with `golden` on it drifts up to 1 and back
 // every GOLD_S seconds.
 let WARM = 0.5, golden = false; const GOLD_S = 300;
-try { golden = localStorage.abyssalGold === '1'; } catch (e) {}
 const warmth = () => golden ? WARM + (1 - WARM) * (0.5 - 0.5 * cos(F[TIME] * TAU / GOLD_S)) : WARM;
 const rowOrd = new Uint8Array(CELLS);
 const RC = new Float64Array(32); // the camera the frame in progress is drawn from: a copy of F taken when it began
@@ -827,7 +833,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.look = (...a) => { fly(false); lookAt(...a); }; window.squid = () => SQUID;
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.tuning = () => ({ tune, det, tuneN, tuneSlip }); window.look = (...a) => { fly(false); lookAt(...a); }; window.squid = () => SQUID;
   window.where = (set, i) => { const a = set === 1 ? TURTLES : SHARKS, o = i * 8, R = a[o + 3], ta = F[TIME] * a[o + 5] + a[o + 7] * 6.3; return [a[o] + R * cos(ta), a[o + 1] + 1.5 * sin(2 * ta + a[o + 7] * 17), a[o + 2] + R * 0.75 * sin(ta)]; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
@@ -873,17 +879,21 @@ let busy = false, fAvg = 0;
 //    only what moves (fish, kelp, the water surface, bubbles and specks, light shafts). The light rippling over the
 //    rocks is in the background too; a pass over the copy (G_RIPPLE) rescales it from the ripples of the moment the
 //    background was drawn (kept in tWater0) to those of now. A view stays for LIVE_VIEW.
+// 3, a still view: not a screensaver but the same drawing as 2, of the view the camera has come to rest at (STILL, a
+//    setting). frame() starts it after a second without movement and ends it at the first input.
 const SAVER_FADE = 3000, SAVER_HOLD = 6000, LIVE_VIEW = 40000;
 let LIVE_PIX = 1280 * 720; try { LIVE_PIX = +localStorage.abyssalLivePix || LIVE_PIX; } catch (e) {} // (the stored value: for trying other sizes)
-let fadeAt = 0, hShown = 0, svPhase = 0, svPix = 0, svDet = 0; // phase: 0 pick the next view, 1 drawing it, 2 showing it
+let fadeAt = 0, hShown = 0, svPhase = 0, svPix = 0, svDet = 0, STILL = TV, idleT = 0; // phase: 0 pick the next view, 1 drawing it, 2 showing it
 let lvStep = 0, lvAt = 0, lvCur = 0, lvHave = false;
 const UBc = new Float32Array(64), RCc = new Float64Array(32), UBn = new Float32Array(64), RCn = new Float64Array(32); // the cameras of the view on screen and of the next
 function saverOn(mode) {
   if (mode === saver || dead) return;
-  if (!saver) { svPix = pix; svDet = det; }
-  saver = mode; fly(false);
-  if (mode) { pix = min(mode > 1 ? LIVE_PIX : 1920 * 1080, DW * DH); det = 1; svPhase = 0; lvHave = false; fadeAt = -1e9; ui(false); } else { pix = svPix; det = svDet; lookAt(...POSES[view]); }
-  body.classList.toggle('s', !!mode); resize();
+  const was = saver;
+  if (!was) { svPix = pix; svDet = det; }
+  saver = mode; svPhase = 0; lvHave = false; fadeAt = -1e9; idleT = 0;
+  if (mode) { pix = min(mode > 1 ? LIVE_PIX : 1920 * 1080, DW * DH); det = 1; if (mode < 3) { fly(false); ui(false); } }
+  else { pix = svPix; det = svDet; if (was < 3) lookAt(...POSES[view]); }
+  body.classList.toggle('s', mode === 1 || mode === 2); resize();
 }
 const nextView = () => { F[FLT] = (F[FLT] + 3.7) % FLYT; flyAt(); };
 function saverTick(now) {
@@ -893,7 +903,7 @@ function saverTick(now) {
 }
 const useCam = (ub, rc) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; tint(UB); gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
 function liveTick(now) {
-  if (svPhase === 0) { nextView(); lvStep = 0; svPhase = 1; }
+  if (svPhase === 0) { if (saver < 3) nextView(); lvStep = 0; svPhase = 1; }
   if (svPhase === 1) { // the next view's background: steps 0 to 3, one per display frame, into the spare background
     sceneFbo = fSt[1 - lvCur];
     if (lvStep === 0) { STEPS[0][1](); UBn.set(UB); RCn.set(RC); } else { useCam(UBn, RCn); STEPS[lvStep][1](); }
@@ -913,7 +923,7 @@ function liveTick(now) {
   gl.useProgram(pRipple); unit(5, tSt[lvCur * 2 + 1]); unit(8, tWater0); tri3(); gl.disable(gl.BLEND); unit(5, tDp);
   for (let i = 4; i < STEPS.length; i++) STEPS[i][1]();
   { const b = fB; fB = fC; fC = b; } hShown++; // the new frame is B; A is only seen during the fade
-  if (now - lvAt > LIVE_VIEW) svPhase = 0;
+  if (saver < 3 && now - lvAt > LIVE_VIEW) svPhase = 0;
 }
 
 async function measure() {
@@ -938,13 +948,23 @@ async function measure() {
 // On a TV a frame takes about 75 ms at 640x360, between four and five refreshes of its 60 Hz display, so frames
 // would come unevenly. PACE holds every frame for five refreshes: a steady 12 a second looks smoother. (Measured on
 // an LG CX: 480x270 fits four refreshes, 15 a second; 720x405 needs six.)
-let PACE = TV ? 78 : 0;
+let PACE = TV ? 78 : 0, tuneN = 0, tuneSlip = 0, tuneT = 0, tuneOk = 0;
 const ft = []; // (debug) the last frame intervals
 function frame(now) {
   requestAnimationFrame(frame);
   if (PACE && !saver && now - F[LAST] < PACE) return; // too early: this refresh keeps the last frame
   const dtr = now - F[LAST]; F[LAST] = now;
   if (debug) { ft.push(dtr); if (ft.length > 400) ft.shift(); }
+  // Self-tuning (a setting, on a TV): every 3 s, if more than one frame in eight came later than its slot the draw
+  // distance drops 8%; after three such periods with hardly any late, it goes back up 6%.
+  if (tune && PACE && !saver && !menu && dtr < 500) {
+    tuneN++; if (dtr > PACE + 15) tuneSlip++;
+    if ((tuneT += dtr) > 3000) {
+      const f = tuneSlip / tuneN;
+      if (f > 0.12) { det = max(0.25, det * 0.92); tuneOk = 0; setSave(); } else if (f < 0.03 && ++tuneOk > 2) { det = min(1, det * 1.06); tuneOk = 0; setSave(); }
+      tuneN = tuneSlip = tuneT = 0;
+    }
+  }
   if (busy) return; // measure() is drawing
   if (dtr < 1e3) fAvg += (dtr - fAvg) * 0.05;
   let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
@@ -965,7 +985,9 @@ function frame(now) {
     dynN = dynT = 0; resize();
   }
   F[TIME] += dt; squidTick(dt);
-  if (saver === 1) saverTick(now); else if (saver === 2) liveTick(now);
+  // a still view ends at the first sign of input
+  if (saver === 3 && (kf || kb || kl || kr || ku || kd || kyl || kyr || cruise || auto || menu || tId >= 0 || mdx || mdy || abs(wv) > 0.05 || (pOn && (abs(pjx) > 0.2 || abs(pjy) > 0.2)))) saverOn(0);
+  if (saver === 1) saverTick(now); else if (saver >= 2) liveTick(now);
   else if (auto) { F[FLT] += dt; if (F[FLT] >= FLYT) F[FLT] = 0; flyAt(); }
   else {
     // touch: holding the finger away from where it went down keeps turning, like a joystick
@@ -994,14 +1016,17 @@ function frame(now) {
     y = y < -52 ? -52 : y > -1.2 ? -1.2 : y;
     F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
     collide();
+    // at rest for over a second: the still view, sharper (see liveTick())
+    idleT = abs(vx) + abs(vy) + abs(vz) > 0.03 || abs(dyw) + abs(dpt) > 1e-4 || tId >= 0 || menu ? 0 : idleT + dt;
+    if (STILL && idleT > 1.2) saverOn(3);
   }
-  if (saver) present(min(1, (now - fadeAt) / SAVER_FADE));
+  if (saver) present(min(1, (now - fadeAt) / (saver > 2 ? 500 : SAVER_FADE)));
   else { render(); hShown++; }
   if (hud) {
     hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
     F[HUDT] += dtr / 1000;
     // (every 2 s: on the TV each change of this text costs about one late frame)
-    if (F[HUDT] > 2) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps${saver ? ` (screensaver: ${(hShown / F[HUDT]).toFixed(1)} new frames a second)` : ''}  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; hShown = 0; }
+    if (F[HUDT] > 2) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps${saver ? ` (${saver > 2 ? 'still view' : 'screensaver'}: ${(hShown / F[HUDT]).toFixed(1)} new frames a second)` : ''}  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; hShown = 0; }
   }
 }
 
@@ -1016,12 +1041,17 @@ if (window.bench) window.step = (n = 1, ms = 33) => { for (let t = F[LAST]; n-- 
 //   OK or click     keep swimming forward (again to stop)
 //   wheel, channel  up / down
 //   red             the autopilot tour           green          next viewpoint
-//   yellow          stats                        blue           swim faster
+//   yellow          the light's colour           blue           swim faster
 //   Back            menu (from the menu: leave the app)
 // The screensavers are buttons in the menu; G (or Play on a remote) starts the animated one, T the stills.
 // the soundscape (../../source/src/audio.js) starts on the first key or click; it is set up after this file has run
 const snd = () => { try { sound(); } catch (e) {} };
-const soundOnOff = () => { snd(); try { mute(); $('n').textContent = 'Sound ' + (muted ? 'off' : 'on'); } catch (e) {} };
+const soundOnOff = () => { snd(); try { mute(); } catch (e) {} };
+const statsOnOff = () => { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; };
+// the yellow button (L): the light's colour, cool as in the original, warm, then golden hour coming and going
+let flashT = 0;
+const flash = (m) => { if (hud) return; info.textContent = m; clearTimeout(flashT); flashT = setTimeout(() => { if (!hud) info.textContent = ''; }, 1800); };
+const lightNext = () => { if (golden) { golden = false; WARM = 0; } else if (WARM < 0.25) WARM = 0.5; else golden = true; flash('Light: ' + (golden ? 'golden hour' : WARM < 0.25 ? 'cool' : 'warm')); setSave(); };
 const held = new Uint8Array(512); // remotes repeat keydown without marking it as a repeat
 const key = (e, v) => {
   const c = e.keyCode;
@@ -1030,7 +1060,8 @@ const key = (e, v) => {
     case 65: kl = v; break; case 68: kr = v; break; case 37: kyl = v; break; case 39: kyr = v; break;
     case 69: case 33: ku = v; break; case 81: case 34: kd = v; break; case 16: ks = v; break;
     default: if (v && !held[c & 511]) {
-      if (c === 72 || c === 405) { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; }
+      if (c === 72) statsOnOff();
+      else if (c === 405 || c === 76) lightNext();
       else if (c === 27 || c === 461) ui(true);
       else if (c === 13 || c === 32) cruise ^= 1;
       else if (c === 70 || c === 403) fly(!auto);
@@ -1047,18 +1078,20 @@ const key = (e, v) => {
 };
 addEventListener('keydown', (e) => {
   const c = e.keyCode; snd();
-  if (saver) { if (c === 72 || c === 405) key(e, 1); else { saverOn(0); if (c === 27 || c === 461) ui(true); } e.preventDefault(); return; } // any key ends the screensaver
+  if (saver === 3) saverOn(0);
+  if (saver) { if (c === 72 || c === 405 || c === 76) key(e, 1); else { saverOn(0); if (c === 27 || c === 461) ui(true); } e.preventDefault(); return; } // any key ends the screensaver
   if (!menu) { key(e, 1); if (TV) e.preventDefault(); return; }
-  if (c === 72 || c === 405 || c === 80) key(e, 1); // behind the menu only the stats and measure keys work
-  else if (c >= 37 && c <= 40) { // the arrows move between the menu's buttons
-    const b = Array.from(document.querySelectorAll('#g button')), i = b.indexOf(document.activeElement);
-    b[(i + (c < 39 ? b.length - 1 : 1)) % b.length].focus(); e.preventDefault();
-  } else if (c === 461 && TV) close();
+  if (c === 72 || c === 80) key(e, 1); // behind the menu only the stats and measure keys work
+  else if (c >= 37 && c <= 40) { // the arrows move between the menu's buttons; on a setting, left and right change it
+    const a = document.activeElement, b = Array.from(document.querySelectorAll('#g button')).filter((x) => x.offsetParent), i = b.indexOf(a);
+    if (a && a.dataset.i && (c === 37 || c === 39)) setStep(+a.dataset.i, c - 38); else b[(i + (c < 39 ? b.length - 1 : 1)) % b.length].focus();
+    e.preventDefault();
+  } else if (c === 461 && TV) { if ($('g').className) setOpen(false); else close(); }
 });
 addEventListener('keyup', (e) => key(e, 0));
 const release = () => { kf = kb = kl = kr = ku = kd = ks = kyl = kyr = 0; tId = -1; tN = 0; pOn = false; held.fill(0); };
 const capture = () => { const p = canvas.requestPointerLock({ unadjustedMovement: true }); if (p && p.catch) p.catch(() => canvas.requestPointerLock()).catch(() => 0); };
-canvas.addEventListener('click', () => { snd(); if (saver) saverOn(0); else if (TV) cruise ^= 1; else capture(); });
+canvas.addEventListener('click', () => { snd(); if (saver === 3) saverOn(0); if (saver) saverOn(0); else if (TV) cruise ^= 1; else capture(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement === canvas) { mdx += e.movementX; mdy += e.movementY; }
   else if (TV) { pjx = e.clientX / innerWidth * 2 - 1; pjy = e.clientY / innerHeight * 2 - 1; pOn = true; pT = performance.now(); }
@@ -1091,9 +1124,47 @@ const ui = (m) => {
   if (m) { release(); for (const t of [100, 1000]) setTimeout(() => menu && document.activeElement === body && bDive.focus(), t); } else document.activeElement.blur();
 };
 const go = () => { snd(); ui(false); bDive.textContent = 'Resume'; if (!TV && !mob) capture(); };
-bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => { snd(); saverOn(2); }; $('u').onclick = () => { snd(); saverOn(1); }; $('n').onclick = soundOnOff;
-const goldLabel = () => { $('y').textContent = 'Golden hour ' + (golden ? 'on' : 'off'); };
-$('y').onclick = () => { golden = !golden; keep('abyssalGold', golden ? 1 : 0); goldLabel(); }; goldLabel();
+bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => { snd(); saverOn(2); }; $('u').onclick = () => { snd(); saverOn(1); }; 
+// ---------------------------------------------------------------- settings
+// A panel in the menu (the Settings button), one row a setting, kept in localStorage.abyssalSet. A row is a slider
+// (v: its value as 0 to 1, set, n steps), a switch (on, flip) or a choice (text, step). Left and right on the
+// remote change the focused row; a click changes it too, down on its left half and up on its right. tv: only on a TV.
+const RESES = [[480, 270, 62, '480×270 · 15 a second'], [640, 360, 78, '640×360 · 12 a second'], [720, 405, 95, '720×405 · 10 a second']]; // size, pace (ms), name
+let resI = 1, tune = false;
+const applyRes = () => { pix = RESES[resI][0] * RESES[resI][1]; PACE = RESES[resI][2]; if (saver) svPix = pix; else { W = 0; resize(); } };
+const SETS = [
+  { label: 'Light shafts', v: () => RAYS / 0.6, set: (u) => { RAYS = u * 0.6; }, n: 15 },
+  { label: 'Warmth', v: () => WARM, set: (u) => { WARM = u; }, n: 10 },
+  { label: 'Golden hour', on: () => golden, flip: () => { golden = !golden; } },
+  { label: 'Life', v: () => LIFE, set: (u) => { LIFE = u; }, n: 10 },
+  { label: 'Sound', on: () => { try { return !!AC && !muted; } catch (e) { return false; } }, flip: soundOnOff },
+  { label: 'Picture', tv: 1, text: () => RESES[resI][3], step: (d) => { resI = (resI + d + 3) % 3; applyRes(); } },
+  { label: 'Draw distance', tv: 1, v: () => (det - 0.25) / 0.75, set: (u) => { det = 0.25 + u * 0.75; }, n: 15 },
+  { label: 'Self-tuning', tv: 1, on: () => tune, flip: () => { tune = !tune; } },
+  { label: 'Sharpen when still', tv: 1, on: () => STILL, flip: () => { STILL = !STILL; } },
+  { label: 'Stats line', on: () => hud, flip: statsOnOff },
+].filter((r) => TV || !r.tv);
+const setSave = () => keep('abyssalSet', JSON.stringify({ rays: RAYS, warm: WARM, gold: golden, life: LIFE, res: resI, det: saver ? svDet : det, tune, still: STILL }));
+const setDraw = () => SETS.forEach((r, i) => { const e = $('t').children[i].lastChild; if (r.v) e.firstChild.firstChild.style.width = round(r.v() * 100) + '%'; else e.textContent = r.text ? '◀ ' + r.text() + ' ▶' : r.on() ? 'On' : 'Off'; });
+// changes setting i one step down (d < 0) or up
+function setStep(i, d) {
+  const r = SETS[i];
+  if (r.v) r.set(clamp(round(r.v() * r.n + d) / r.n, 0, 1)); else if (r.step) r.step(d); else r.flip();
+  setSave(); setTimeout(setDraw, 60); // (the sound switch takes a moment to know its state)
+}
+const setOpen = (on) => { $('g').className = on ? 'set' : ''; $('e').textContent = on ? 'Controls' : 'Settings'; if (on) { setDraw(); $('t').firstChild.focus(); } else $('e').focus(); };
+SETS.forEach((r, i) => {
+  const b = document.createElement('button'); b.dataset.i = i;
+  b.innerHTML = '<span></span>' + (r.v ? '<em><u><i></i></u></em>' : '<em></em>'); b.firstChild.textContent = r.label;
+  b.onclick = (e) => { const q = b.getBoundingClientRect(); setStep(i, r.v || r.step ? (e.clientX && e.clientX < q.left + q.width / 2 ? -1 : 1) : 1); };
+  $('t').appendChild(b);
+});
+$('e').onclick = () => setOpen(!$('g').className);
+try {
+  const o = JSON.parse(localStorage.abyssalSet || '{}');
+  if (o.rays >= 0) RAYS = o.rays; if (o.warm >= 0) WARM = o.warm; if (o.gold !== undefined) golden = !!o.gold; if (o.life >= 0) LIFE = o.life;
+  if (TV) { if (o.det >= 0.25) det = o.det; tune = !!o.tune; if (o.still !== undefined) STILL = !!o.still; if (o.res >= 0 && o.res < 3 && o.res !== resI) { resI = o.res; applyRes(); } }
+} catch (e) {}
 // detail buttons: the current level is lit, the others reload the page with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 3 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssalGL', 3 - i); location.reload(); }; });
 document.addEventListener('pointerlockchange', () => { if (!TV && !saver) ui(!document.pointerLockElement); });
