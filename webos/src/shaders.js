@@ -898,8 +898,9 @@ void main() { ivec2 p = ivec2(gl_FragCoord.xy); oc = mix(texelFetch(tS, p, 0), t
 
 // Animated screensaver: the light rippling over the frozen background. A factor for every pixel of it (drawn with
 // multiplying blend): where the sun reaches, the direct light as it would be with the ripples of now (tW) over the
-// direct light with the ripples of the moment the background was drawn (tW0). The position comes from the
-// background's depth; this cannot tell how much of a pixel was direct light, so it is an approximation.
+// direct light with the ripples of the moment the background was drawn (tW0). The position and the way the surface
+// faces come from the background's depth; this cannot tell how much of a pixel was direct light, so it is an
+// approximation.
 const G_RIPPLE = GH + S_B + `
 uniform sampler2D tDp;
 uniform sampler2D tW0;
@@ -916,7 +917,12 @@ void main() {
   float far = ss(35., 100., d);
   float f = (.10 + mix(a, .33, far) * 2.5) / (.10 + mix(b, .33, far) * 2.5);
   float lit = shadow1(wp + g.sun.xyz * .5);
-  oc = vec4(vec3(mix(1., clamp(f, .5, 2.2), lit * .75)), 1.);
+  // Which way the surface faces, from how the position changes across the screen: the full shader ripples the light
+  // only on surfaces turned to the sun. Without this the pattern, which is projected along the sun's rays, smears
+  // down every steep rock face in streaks.
+  vec3 n = normalize(cross(dFdx(wp), dFdy(wp))); if (dot(n, rv) > 0.) { n = -n; }
+  float face = ss(.1, .45, dot(n, g.sun.xyz)) * sat(dot(n, g.sun.xyz) * 1.5);
+  oc = vec4(vec3(mix(1., clamp(f, .6, 1.8), lit * face * .7)), 1.);
 }
 `;
 
