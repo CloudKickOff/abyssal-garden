@@ -732,7 +732,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) window.SK = SK;
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
@@ -813,9 +813,15 @@ async function measure() {
   await show(`as it is, measured again: ${again[0].toFixed(1)} ms`);
 }
 
+// On a TV a frame takes about 55 ms, between three and four refreshes of its 60 Hz display, so frames would come
+// unevenly, 50 and 67 ms apart. PACE holds every frame for four refreshes: a steady 15 a second looks smoother.
+let PACE = TV ? 62 : 0;
+const ft = []; // (debug) the last frame intervals
 function frame(now) {
   requestAnimationFrame(frame);
+  if (PACE && !saver && now - F[LAST] < PACE) return; // too early: this refresh keeps the last frame
   const dtr = now - F[LAST]; F[LAST] = now;
+  if (debug) { ft.push(dtr); if (ft.length > 400) ft.shift(); }
   if (busy) return; // measure() is drawing
   if (dtr < 1e3) fAvg += (dtr - fAvg) * 0.05;
   let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
@@ -871,7 +877,8 @@ function frame(now) {
   if (hud) {
     hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
     F[HUDT] += dtr / 1000;
-    if (F[HUDT] > 0.5) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps${saver ? ` (screensaver: ${(hShown / F[HUDT]).toFixed(1)} new frames a second)` : ''}  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; hShown = 0; }
+    // (every 2 s: on the TV each change of this text costs about one late frame)
+    if (F[HUDT] > 2) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps${saver ? ` (screensaver: ${(hShown / F[HUDT]).toFixed(1)} new frames a second)` : ''}  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  ${W}x${H} (${W * 100 / DW | 0}%)  ·  draw distance ${det * 100 | 0}%\n${['High', 'Medium', 'Low', 'TV'][LV]} detail  ·  ${GPUNAME}`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; hShown = 0; }
   }
 }
 
