@@ -6,11 +6,14 @@
 // localStorage.abyssalGL = "level,pixels,detail". abyssalGLLoad is set while the world is built: still set on the
 // next visit means that load crashed the app, so this one runs a level lower.
 // TV: running as a webOS app (or ?tv in the address, to try the TV controls on a computer). ?lv=N forces a level.
+// On a TV the menu does not offer the other levels; ?lv=N is the only way to one.
 const TV = /Web0S|webOS/i.test(navigator.userAgent) || /[?&]tv\b/.test(location.search);
 const mob = !TV && matchMedia('(pointer:coarse)').matches, mem = navigator.deviceMemory;
 const keep = (k, v) => { try { localStorage[k] = v; } catch (e) {} };
 let SV = [], LV, bad;
 try { SV = (localStorage.abyssalGL || '').split(','); bad = localStorage.abyssalGLLoad; } catch (e) {}
+// a TV only ever runs the TV level, whatever was kept: Low and above exhaust its memory (an LG CX had to be restarted)
+if (TV) SV[0] = '3';
 { const q = /[?&]lv=(\d)/.exec(location.search); if (q) SV = [q[1]]; }
 LV = SV[0] ? +SV[0] : TV ? 3 : mob ? (mem > 7 ? 1 : 2) : mem <= 4 ? 2 : 0;
 if (bad && LV < 3) { SV = [++LV]; keep('abyssalGL', LV); }

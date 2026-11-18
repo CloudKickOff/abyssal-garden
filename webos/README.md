@@ -10,7 +10,7 @@ used unchanged. This folder replaces the renderer:
 |---|---|
 | [`src/shaders.js`](src/shaders.js) | The WGSL shaders translated to GLSL ES 3.00 |
 | [`src/main.js`](src/main.js) | The WebGL2 renderer, plus TV remote input and the autopilot tour |
-| [`src/quality.js`](src/quality.js) | Detail levels, with a new **TV** level below Low |
+| [`src/quality.js`](src/quality.js) | Detail levels, with a new **TV** level below Low. On a TV it is the only one: the menu hides the others, because Low and above run it out of memory |
 | [`template.html`](template.html) | The page, with CSS that Chromium 68 understands |
 
 Not ported: anti-aliasing. The sound is this port's own and off by default: a low rumble, slow waves and the odd
