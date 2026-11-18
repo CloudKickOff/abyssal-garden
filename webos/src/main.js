@@ -489,18 +489,18 @@ unit(0, tShadow); unit(1, tWater); unit(2, tDetail); unit(3, tVol, gl.TEXTURE_3D
 // ---------------------------------------------------------------- render targets (rebuilt on resize)
 // The scene is drawn at `pix` pixels and scaled up to the window. frame() tunes it and the draw distance scale `det`
 // for 60 fps; both start where the last visit left them. A TV has one known, slow graphics chip: there both are
-// fixed (480x270, 40%), and only the screensaver changes them.
+// fixed (640x360, 40%), and only the screensavers change them.
 const PIXMAX = TV ? 1280 * 720 : 2560 * 1440, PIXMIN = TV ? 13e4 : mob ? 25e4 : 5e5, DETMIN = 0.4, TF = TV ? 1000 / 30 : 1000 / 60;
-let W = 0, H = 0, DW = 0, DH = 0, pix = TV ? 480 * 270 : +SV[1] || (LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = TV ? 0.4 : +SV[2] || 1, dynN = 0, dynT = 0, dynBad = 0, dynOk = 0, dynWait = 3;
+let W = 0, H = 0, DW = 0, DH = 0, pix = TV ? 640 * 360 : +SV[1] || (LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = TV ? 0.4 : +SV[2] || 1, dynN = 0, dynT = 0, dynBad = 0, dynOk = 0, dynWait = 3;
 const NB = 6;
 let tRes, tDp, tRay, tRay2, fScene, fRay, fRay2, tBl = [], fBl = [], targets = [], fbos = [];
 // finished frames: three textures taking turns as A (the older one shown), B (the newer) and C (being drawn)
 let tF = [], fF = [], fA = 0, fB = 1, fC = 2, stepI = 0, tSt = [], fSt = [], saver = 0;
-// The TV's interactive picture is small (480x270). Rather than let the TV stretch it over the screen, the canvas is
-// UP times that size and present() enlarges the frame onto it: first an edge-smoothing pass at the frame's own size
+// The TV's interactive picture is small (640x360). Rather than let the TV stretch it over the screen, the canvas is
+// 1080 lines tall instead (UP; UPN is the factor that makes) and present() enlarges the frame onto it: first an edge-smoothing pass at the frame's own size
 // (FXAA: the small picture's stair-stepped edges are what shows most when it is enlarged), then a bicubic filter
 // with SHARP of sharpening.
-let UP = TV ? 4 : 1, SHARP = 0.35, SMOOTH = true, UPN = 1, tAA = null, fAA = null; // UPN: the factor in use (1 in the screensavers, which draw at full size)
+let UP = TV ? 4 : 1, SHARP = 0.35, SMOOTH = true, UPN = 1, tAA = null, fAA = null; // UP: 1 off, more on // UPN: the factor in use (1 in the screensavers, which draw at full size)
 let sceneFbo = null; // where the scene steps draw: fScene, or a background of the animated screensaver
 function resize() {
   DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio));
@@ -508,7 +508,7 @@ function resize() {
   const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
   if (w === W && h === H) return;
   dynN = 0; dynT = -300; // let the new size settle before measuring again
-  W = w; H = h; UPN = saver ? 1 : UP; canvas.width = W * UPN; canvas.height = H * UPN;
+  W = w; H = h; UPN = saver || UP < 2 ? 1 : max(1, 1080 / H); canvas.width = round(W * UPN); canvas.height = round(H * UPN);
   for (const t of targets) gl.deleteTexture(t);
   for (const f of fbos) gl.deleteFramebuffer(f);
   tRes = tex(W, H, HDR); tDp = tex(W, H, DEPTH, { min: gl.NEAREST, mag: gl.NEAREST });
@@ -534,7 +534,8 @@ addEventListener('resize', resize);
 let hud = false, auto = false, cruise = 0, fast = 0, view = 0;
 let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, kyl = 0, kyr = 0, wv = 0, pjx = 0, pjy = 0, pOn = false, pT = 0;
 let mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
-const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, RAYS = 0.54;
+const TANH = 0.6, NEAR = 0.1, EXPO = 0.62;
+let RAYS = TV ? 0.36 : 0.54; // strength of the light shafts (less on a TV: at its low resolution they read as haze)
 const rowOrd = new Uint8Array(CELLS);
 const RC = new Float64Array(32); // the camera the frame in progress is drawn from: a copy of F taken when it began
 // Draws the cells of a cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for the
@@ -703,9 +704,9 @@ const STEPS = [
 const flip = () => { const a = fA; fA = fB; fB = fC; fC = a; };
 // puts frame A faded k of the way to frame B on the screen
 function present(k) {
-  flat(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W * UPN, H * UPN);
+  flat(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, canvas.width, canvas.height);
   if (UPN > 1) {
-    if (SMOOTH) { gl.bindFramebuffer(FB, fAA); gl.viewport(0, 0, W, H); gl.useProgram(pAA); unit(7, tF[fB]); tri3(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, W * UPN, H * UPN); }
+    if (SMOOTH) { gl.bindFramebuffer(FB, fAA); gl.viewport(0, 0, W, H); gl.useProgram(pAA); unit(7, tF[fB]); tri3(); gl.bindFramebuffer(FB, null); gl.viewport(0, 0, canvas.width, canvas.height); }
     gl.useProgram(pBig); gl.uniform4f(uBig, W, H, SHARP, UPN); unit(7, SMOOTH ? tAA : tF[fB]); tri3(); return;
   }
   gl.useProgram(pFade); gl.uniform1f(uFade, k); unit(6, tF[fA]); unit(7, tF[fB]); tri3();
@@ -744,7 +745,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
@@ -825,9 +826,10 @@ async function measure() {
   await show(`as it is, measured again: ${again[0].toFixed(1)} ms`);
 }
 
-// On a TV a frame takes about 55 ms, between three and four refreshes of its 60 Hz display, so frames would come
-// unevenly, 50 and 67 ms apart. PACE holds every frame for four refreshes: a steady 15 a second looks smoother.
-let PACE = TV ? 62 : 0;
+// On a TV a frame takes about 75 ms at 640x360, between four and five refreshes of its 60 Hz display, so frames
+// would come unevenly. PACE holds every frame for five refreshes: a steady 12 a second looks smoother. (Measured on
+// an LG CX: 480x270 fits four refreshes, 15 a second; 720x405 needs six.)
+let PACE = TV ? 78 : 0;
 const ft = []; // (debug) the last frame intervals
 function frame(now) {
   requestAnimationFrame(frame);
