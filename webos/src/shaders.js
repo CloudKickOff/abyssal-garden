@@ -1009,7 +1009,8 @@ void main() {
   emit(o);
 }
 `;
-// cA: the underside's colour; cB: the back's, and in .a the scale of the mottling
+// cA: the underside's colour, and in .a how much of the light that falls on it comes back in its own colour (as with
+// the fish); cB: the back's, and in .a the scale of the mottling
 const G_CRE_F = GH + S_B + V_ANIM.fs + `
 uniform vec4 cA; uniform vec4 cB;
 void main() {
@@ -1019,7 +1020,9 @@ void main() {
   vec4 tx = textureSample(tD, sR, i.op.xz * cB.a + i.sd);
   vec3 alb = mix(cA.rgb, cB.rgb, ss(-.04, .05, i.op.y)) * (.6 + .8 * tx.b);
   vec3 E = sunE(i.wp.y, z) * i.lt;
-  vec3 c = alb * (E * (.25 + .75 * sat(dot(n, L))) * (.6 + caus2(i.wp, length(i.wp - g.cam.xyz))) + amb(i.wp, n, vv.g, z) * 1.3);
+  vec3 lt = E * (.25 + .75 * sat(dot(n, L))) * (.6 + caus2(i.wp, length(i.wp - g.cam.xyz))) + amb(i.wp, n, vv.g, z) * 1.3;
+  float sh = .3 + .7 * pow(sat(dot(n, normalize(L + vec3f(0., .7, 0.))) * .5 + .5), 1.6);
+  vec3 c = alb * (lt + cA.a * sh * dot(lt, vec3f(.1, .5, .5)));
   c += E * pow(sat(dot(n, normalize(V + L))), 24.) * .5 + vec3f(.3, .6, .7) * pow(1. - sat(dot(n, V)), 3.) * .2 * vv.g;
   oc = fin(fog(c, i.wp, z));
 }

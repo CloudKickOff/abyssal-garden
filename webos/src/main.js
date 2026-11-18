@@ -523,7 +523,7 @@ const SHARKS = new Float32Array([0, -24, 0, 72, 0.3, 0.021, 6, 0.1, -30, -17, -4
 const TURTLES = new Float32Array([10, -37, 4, 12, 0.2, 0.07, 1.5, 0.2, 50, -36, 30, 14, 0.5, -0.06, 1.3, 0.7, -52, -34, -14, 16, 0.8, 0.055, 1.6, 0.45, 6, -35, -66, 13, 0.4, -0.065, 1.4, 0.9, 2, -34, 66, 15, 0.6, 0.06, 1.2, 0.05]);
 const ibFish = vbuf(Wd.fish), ibManta = vbuf(Wd.mantas), ibBubbles = vbuf(Wd.bubbles), ibSnowB = vbuf(Wd.snow);
 const ibGl = vbuf(Wd.glints), nGl = Wd.glints.length / 8;
-const ibShark = vbuf(SHARKS), ibTurtle = vbuf(TURTLES), ibOne = vbuf(new Float32Array([0, 0, 0, 0, 0.5, 1, 1.8, 0])), ibInk = gl.createBuffer();
+const ibShark = vbuf(SHARKS), ibTurtle = vbuf(TURTLES), ibOne = vbuf(new Float32Array([0, 0, 0, 0, 0.5, 1, 2.6, 0])), ibInk = gl.createBuffer();
 const nFish = Wd.fish.length / 8, nManta = Wd.mantas.length / 8, nBub = Wd.bubbles.length / 8, nSnow = Wd.snow.length / 4;
 const MANTA = meshes[12], FISH = meshes[13];
 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -746,13 +746,14 @@ const STEPS = [
   if (!SK.fish) {
     gl.useProgram(pManta); drawMesh(MANTA, ibManta, L_ANIM, 0, nManta);
     gl.useProgram(pFish); drawMesh(FISH, ibFish, L_ANIM, 0, ceil(nFish * LIFE));
-    // sharks, turtles, squid: wag speed and size, flap speed and size; underside and back colours (+ pattern scale)
+    // sharks, turtles, squid: wag speed and size, flap speed and size; underside colour (+ how much it glows in its
+    // own colour, as the fish do) and back colour (+ pattern scale)
     gl.useProgram(pCre); gl.uniform4f(uCre.ex, 0, 0, 0, 0);
-    gl.uniform4f(uCre.par, 2.2, 0.22, 0, 0); gl.uniform4f(uCre.cA, 0.62, 0.68, 0.72, 0); gl.uniform4f(uCre.cB, 0.13, 0.19, 0.25, 2);
+    gl.uniform4f(uCre.par, 2.2, 0.22, 0, 0); gl.uniform4f(uCre.cA, 0.62, 0.68, 0.72, 0.15); gl.uniform4f(uCre.cB, 0.13, 0.19, 0.25, 2);
     drawMesh(CRE[0], ibShark, L_ANIM, 0, ceil(SHARKS.length / 8 * LIFE));
-    gl.uniform4f(uCre.par, 0, 0, 1.7, 0.16); gl.uniform4f(uCre.cA, 0.6, 0.55, 0.36, 0); gl.uniform4f(uCre.cB, 0.13, 0.17, 0.06, 7);
+    gl.uniform4f(uCre.par, 0, 0, 1.7, 0.16); gl.uniform4f(uCre.cA, 0.75, 0.68, 0.4, 0.5); gl.uniform4f(uCre.cB, 0.22, 0.3, 0.08, 7);
     drawMesh(CRE[1], ibTurtle, L_ANIM, 0, ceil(TURTLES.length / 8 * LIFE));
-    gl.uniform4f(uCre.par, 0, 0, 2.6, 0.07); gl.uniform4f(uCre.cA, 0.95, 0.5, 0.42, 0); gl.uniform4f(uCre.cB, 0.8, 0.2, 0.16, 14);
+    gl.uniform4f(uCre.par, 0, 0, 2.6, 0.07); gl.uniform4f(uCre.cA, 1, 0.62, 0.5, 1.3); gl.uniform4f(uCre.cB, 1, 0.22, 0.12, 14);
     for (let i = 0, n = ceil(SQUID.length * LIFE); i < n; i++) {
       const q = SQUID[i]; gl.uniform4f(uCre.ex, q.x, q.y, q.z, 1); gl.uniform4f(uCre.exd, q.hx, q.hy, q.hz, 0); drawMesh(CRE[2], ibOne, L_ANIM, 0, 1);
     }
@@ -861,18 +862,28 @@ const goTo = (i) => { fly(false); view = i; lookAt(...POSES[i]); };
 
 // Amount of life, 0 to 1 (a setting): the share of the fish, sharks, turtles and squid that is drawn.
 let LIFE = 0.7;
-// Squid hang in the water near the tour path. When the camera comes within 7 m one lets go a cloud of ink and darts
-// off, slowing to a new place to hang. x, y, z; heading; speed; t: seconds of flight left; ph: phase of its drift.
-const SQUID = [4, 11, 19].map((k, i) => ({ x: FLY[k * 6] + 3, y: FLY[k * 6 + 1] + 1 - i, z: FLY[k * 6 + 2] + 3, hx: 1, hy: 0, hz: 0, v: 0, t: 0, ph: i * 2.1 }));
+// Squid hang in the water where they will be seen: one 11 m in front of each numbered viewpoint, and three beside
+// the tour path, 9 m off it (the tour passes without disturbing them). When the camera comes within 7 m one lets
+// go a cloud of ink and darts off; half a minute later it swims back home. x, y, z; heading; speed; t: seconds of
+// flight left; w: seconds until it heads home; ph: phase of its drift; ox, oy, oz: home.
+const SQUID = [];
+{
+  const add = (x, y, z) => SQUID.push({ x, y, z, ox: x, oy: y, oz: z, hx: 1, hy: 0, hz: 0, v: 0, t: 0, w: 0, ph: SQUID.length * 2.1 });
+  for (const p of POSES) { const dx = p[3] - p[0], dy = p[4] - p[1], dz = p[5] - p[2], l = hypot(dx, dy, dz); add(p[0] + dx / l * 11, min(-6, p[1] + dy / l * 11 + 0.8), p[2] + dz / l * 11); }
+  for (const k of [4, 11, 19]) { const a = k * 6, dx = FLY[a + 6] - FLY[a], dz = FLY[a + 8] - FLY[a + 2], l = hypot(dx, dz) || 1; add(FLY[a] - dz / l * 9, FLY[a + 1] + 1.5, FLY[a + 2] + dx / l * 9); }
+}
 const INK = [], INKB = new Float32Array(64 * 8); let nInk = 0; // ink blobs: x, y, z, their drift, age, life, size
 function squidTick(dt) {
   for (let i = 0, n = ceil(SQUID.length * LIFE); i < n; i++) {
     const q = SQUID[i], dx = q.x - F[CX], dy = q.y - F[CY], dz = q.z - F[CZ], d = sqrt(dx * dx + dy * dy + dz * dz);
     if (q.t <= 0 && d < 7 && !saver) { // off it goes, away from the camera and a little upwards, the ink left where it was
-      const l = sqrt(dx * dx + dz * dz) || 1; q.hx = dx / l * 0.94; q.hz = dz / l * 0.94; q.hy = 0.34; q.v = 11; q.t = 5;
+      const l = sqrt(dx * dx + dz * dz) || 1; q.hx = dx / l * 0.94; q.hz = dz / l * 0.94; q.hy = 0.34; q.v = 8; q.t = 5;
       for (let k = 0; k < 16 && INK.length < 64; k++) INK.push([q.x + rr(-0.4, 0.4), q.y + rr(-0.4, 0.4), q.z + rr(-0.4, 0.4), rr(-0.5, 0.5), rr(-0.2, 0.5), rr(-0.5, 0.5), 0, rr(7, 12), rr(0.5, 1.1)]);
     }
-    if (q.t > 0) { q.t -= dt; q.v *= exp(-dt * 0.9); } else { q.ph += dt; q.v = 0.25; const a = q.ph * 0.2; q.hx += (cos(a) - q.hx) * dt; q.hz += (sin(a) - q.hz) * dt; q.hy += (sin(q.ph * 0.5) * 0.25 - q.hy) * dt; }
+    const ex = q.ox - q.x, ey = q.oy - q.y, ez = q.oz - q.z, el = sqrt(ex * ex + ey * ey + ez * ez);
+    if (q.t > 0) { q.t -= dt; q.v *= exp(-dt * 0.9); q.w = 30; } // fleeing
+    else if ((q.w -= dt) < 0 && el > 1.5 && d > 12) { q.v = 1.4; q.hx += (ex / el - q.hx) * dt * 2; q.hy += (ey / el - q.hy) * dt * 2; q.hz += (ez / el - q.hz) * dt * 2; } // going home
+    else { q.ph += dt; q.v = 0.25; const a = q.ph * 0.2; q.hx += (cos(a) - q.hx) * dt; q.hz += (sin(a) - q.hz) * dt; q.hy += (sin(q.ph * 0.5) * 0.25 - q.hy) * dt; } // hanging about
     q.x += q.hx * q.v * dt; q.y = min(-4, max(-44, q.y + q.hy * q.v * dt)); q.z += q.hz * q.v * dt;
     const r = sqrt(q.x * q.x + q.z * q.z); if (r > 140) { q.x *= 140 / r; q.z *= 140 / r; }
   }

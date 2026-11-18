@@ -98,8 +98,8 @@ The menu also has a row of buttons:
 Beyond the original's mantas and its fish (twice the size here, to be seen across a room, and each school painted as
 a reef species: clownfish, yellow and blue tangs, royal gramma, parrotfish, a banded one, anthias; and each of the
 original's twelve big schools split into three smaller shoals on paths of their own), this port adds sharks and
-turtles on wide looping paths, and squid that hang near the tour path: come within 7 m and one leaves a cloud of ink
-and darts away.
+turtles on wide looping paths, and nine squid: one hanging in front of each numbered viewpoint and three beside the
+tour path. Come within 7 m and one leaves a cloud of ink and darts away; half a minute later it swims back.
 
 While the app is open it tells webOS not to start its own screensaver.
 
