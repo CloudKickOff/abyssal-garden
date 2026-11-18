@@ -225,13 +225,14 @@ void main() {
 
 // ---------------------------------------------------------------- shared scene code
 const S_G = `
-layout(std140) uniform G { mat4 vp; mat4 sm; vec4 cam; vec4 right; vec4 up; vec4 fwd; vec4 sun; vec4 res; vec4 mis; } g;
+layout(std140) uniform G { mat4 vp; mat4 sm; vec4 cam; vec4 right; vec4 up; vec4 fwd; vec4 sun; vec4 res; vec4 mis; vec4 warm; } g;
 const vec3 SIG = vec3f(.058, .0235, .0195);
 const vec3 KD = vec3f(.056, .0245, .0170);
 const vec3 WCOL = vec3f(.16, .58, .90);
 const vec3 KDZ = vec3f(.034, .023, .018);
 const vec3 PCOL = vec3f(.58, .66, .98);
-const vec3 SUNC = vec3f(1.7, 1.6, 1.45);
+// the sun's colour, tinted by g.warm.rgb (1 = the original; the port can warm it, see main.js)
+#define SUNC (vec3f(1.7, 1.6, 1.45) * g.warm.rgb)
 const float TAU = 6.2831853;
 const bool LOW = ${LV > 1};
 const bool LEAN = ${LEAN};
@@ -866,6 +867,12 @@ void main() {
   vec3 bl = textureLod(tB, uv, 0.).rgb;
   c = mix(c, bl, .06) + bl * .03;
   c *= g.mis.x;
+  // warmth (g.warm.a): up to .5 it only shifts the white balance away from blue. Past .5, golden hour: the brightest
+  // parts (the surface, the shafts, sunlit rock) are also pulled towards amber of their own brightness, while the
+  // deep water and the shadows keep their blue. (A tint alone cannot do that: the water has almost no red to scale.)
+  c *= mix(vec3f(1.), vec3f(1.14, 1., .80), g.warm.a);
+  float wl = dot(c, vec3f(.2126, .7152, .0722)); float wk = wl / (wl + .45);
+  c = mix(c, vec3f(2., 1., .22) * wl, clamp(g.warm.a * 2. - 1., 0., 1.) * wk * wk);
   vec2 q = uv - .5;
   c *= 1. - dot(q, q) * .55;
   c = tmap(c);

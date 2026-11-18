@@ -103,7 +103,7 @@ const fWater = fbo(tWater), fDetail = fbo(tDetail), fShadow = fbo(null, tShadow)
 // the water texture as it was when the animated screensaver's background was drawn (see liveTick())
 const tWater0 = tex(WATER, WATER, HDR, { mips: 5, min: gl.LINEAR_MIPMAP_LINEAR, wrap: gl.REPEAT }), fWater0 = fbo(tWater0);
 
-const UB = new Float32Array(60), UBS = new Float32Array(60);
+const UB = new Float32Array(64), UBS = new Float32Array(64);
 const ubo = gl.createBuffer(), uboS = gl.createBuffer();
 gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferData(gl.UNIFORM_BUFFER, UB, gl.DYNAMIC_DRAW);
 
@@ -420,15 +420,17 @@ const cellSort = (first, n) => {
   return { buf: vbuf(o), start, lo, hi, mar };
 };
 const boulders = LEAN ? [0, 1, 2, 3].map((i) => cellSort(Wd.solids.ranges[i][0], Wd.solids.ranges[i][1])) : null;
-// Drops the leaves of a cell-sorted leaf set (36 bytes each) that stand in `part` of the 1.3 m squares of the seabed,
-// picked by a hash: whole kelp plants go, rather than every plant getting thinner. The same squares for every set.
+// Drops `part` of the plants of a cell-sorted leaf set (36 bytes a leaf), picked by a hash: whole plants go, rather
+// than every plant getting thinner. Every leaf and stem piece of a plant carries its height above the plant's foot,
+// so its own height less that is the height of the seabed there, which tells the plants apart (to 5 mm) however far
+// a tall one leans. The same plants go from every set.
 const thinPlants = (c, part) => {
   const u = c.buf instanceof ArrayBuffer ? new Uint8Array(c.buf) : c.buf, f = new Float32Array(u.buffer, u.byteOffset, c.n * 9);
   const o = new Uint8Array(c.n * 36), st = new Uint32Array(c.start.length); let n = 0;
   for (let i = 0; i + 1 < c.start.length; i++) {
     st[i] = n;
     for (let j = c.start[i]; j < c.start[i + 1]; j++) {
-      const h = sin(floor(f[j * 9] / 1.3) * 127.1 + floor(f[j * 9 + 2] / 1.3) * 311.7) * 43758.5453;
+      const h = sin(round((f[j * 9 + 1] - f[j * 9 + 7]) * 200) * 12.9898) * 43758.5453;
       if (h - floor(h) >= part) o.set(u.subarray(j * 36, j * 36 + 36), n++ * 36);
     }
   }
@@ -537,7 +539,13 @@ let mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin
 const TANH = 0.6, NEAR = 0.1, EXPO = 0.62;
 let PROPD = 45; // TV level: sponges and corals are drawn to this many metres, shrinking away over the last quarter (on an
 // LG CX 45 m costs nothing measurable over 30; at 60 m one frame in seven misses its slot)
-let RAYS = TV ? 0.36 : 0.54; // strength of the light shafts (less on a TV: at its low resolution they read as haze)
+let RAYS = TV ? 0.26 : 0.54; // strength of the light shafts (less on a TV: at its low resolution they read as haze)
+// Warmth of the light, 0 (the original, quite blue) through 0.5 (a warmer white balance) to 1 (golden hour): it tints
+// the sun's colour and the final grade (G_POST). WARM is where it rests; with `golden` on it drifts up to 1 and back
+// every GOLD_S seconds.
+let WARM = 0.5, golden = false; const GOLD_S = 300;
+try { golden = localStorage.abyssalGold === '1'; } catch (e) {}
+const warmth = () => golden ? WARM + (1 - WARM) * (0.5 - 0.5 * cos(F[TIME] * TAU / GOLD_S)) : WARM;
 const rowOrd = new Uint8Array(CELLS);
 const RC = new Float64Array(32); // the camera the frame in progress is drawn from: a copy of F taken when it began
 // Draws the cells of a cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for the
@@ -584,6 +592,8 @@ const SK = { water: 0, terrain: 0, 'set pieces': 0, rocks: 0, plants: 0, fish: 0
 // shows the result at once.
 const flat = () => { gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); };
 // the camera at F into the frame's uniforms and RC
+// the warmth of the light into a frame's uniforms
+function tint(m) { const w = warmth(); m[60] = 1 + 0.38 * w; m[61] = 1; m[62] = 1 - 0.42 * w; m[63] = w; }
 function camera() {
   // camera basis (right vector is horizontal)
   // camera basis (right vector is horizontal)
@@ -604,6 +614,7 @@ function camera() {
   m[51] = zt * zt * (3 - 2 * zt);
   let ek = (-cy - 8) / 26; ek = ek < 0 ? 0 : ek > 1 ? 1 : ek;
   m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det; m[59] = PROPD;
+  tint(m);
   gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB);
   { let cr = floor((cz - OZ) / CELLW) | 0; cr = cr < 0 ? 0 : cr > CELLS - 1 ? CELLS - 1 : cr; let n = 0; rowOrd[n++] = cr; for (let d = 1; d < CELLS; d++) { if (cr - d >= 0) rowOrd[n++] = cr - d; if (cr + d < CELLS) rowOrd[n++] = cr + d; } }
   RC.set(F);
@@ -747,7 +758,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
@@ -770,7 +781,7 @@ const SAVER_FADE = 3000, SAVER_HOLD = 6000, LIVE_VIEW = 40000;
 let LIVE_PIX = 1280 * 720; try { LIVE_PIX = +localStorage.abyssalLivePix || LIVE_PIX; } catch (e) {} // (the stored value: for trying other sizes)
 let fadeAt = 0, hShown = 0, svPhase = 0, svPix = 0, svDet = 0; // phase: 0 pick the next view, 1 drawing it, 2 showing it
 let lvStep = 0, lvAt = 0, lvCur = 0, lvHave = false;
-const UBc = new Float32Array(60), RCc = new Float64Array(32), UBn = new Float32Array(60), RCn = new Float64Array(32); // the cameras of the view on screen and of the next
+const UBc = new Float32Array(64), RCc = new Float64Array(32), UBn = new Float32Array(64), RCn = new Float64Array(32); // the cameras of the view on screen and of the next
 function saverOn(mode) {
   if (mode === saver || dead) return;
   if (!saver) { svPix = pix; svDet = det; }
@@ -784,7 +795,7 @@ function saverTick(now) {
   if (svPhase === 1) { STEPS[stepI++][1](); if (stepI === STEPS.length) { stepI = 0; flip(); fadeAt = now; svPhase = 2; hShown++; } }
   else if (now - fadeAt > SAVER_FADE + SAVER_HOLD) svPhase = 0;
 }
-const useCam = (ub, rc) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
+const useCam = (ub, rc) => { UB.set(ub); RC.set(rc); UB[35] = F[TIME]; tint(UB); gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB); };
 function liveTick(now) {
   if (svPhase === 0) { nextView(); lvStep = 0; svPhase = 1; }
   if (svPhase === 1) { // the next view's background: steps 0 to 3, one per display frame, into the spare background
@@ -985,6 +996,8 @@ const ui = (m) => {
 };
 const go = () => { snd(); ui(false); bDive.textContent = 'Resume'; if (!TV && !mob) capture(); };
 bDive.onclick = go; $('o').onclick = () => ui(true); $('x').onclick = measure; $('v').onclick = () => { snd(); saverOn(2); }; $('u').onclick = () => { snd(); saverOn(1); }; $('n').onclick = soundOnOff;
+const goldLabel = () => { $('y').textContent = 'Golden hour ' + (golden ? 'on' : 'off'); };
+$('y').onclick = () => { golden = !golden; keep('abyssalGold', golden ? 1 : 0); goldLabel(); }; goldLabel();
 // detail buttons: the current level is lit, the others reload the page with theirs
 $('q').querySelectorAll('button').forEach((b, i) => { if (i === 3 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssalGL', 3 - i); location.reload(); }; });
 document.addEventListener('pointerlockchange', () => { if (!TV && !saver) ui(!document.pointerLockElement); });

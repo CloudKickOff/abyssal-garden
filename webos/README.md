@@ -78,6 +78,8 @@ The menu also has a row of buttons:
 
   Any key ends either one.
 - **Sound** turns the soundscape on and off (`M` on a keyboard).
+- **Golden hour** lets the light drift from its usual colour to a warm late-afternoon one and back, every five
+  minutes.
 - **Measure speed** times the frame with each part left out in turn, and lists how long loading took.
 
 While the app is open it tells webOS not to start its own screensaver.
