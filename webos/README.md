@@ -13,7 +13,8 @@ used unchanged. This folder replaces the renderer:
 | [`src/quality.js`](src/quality.js) | Detail levels, with a new **TV** level below Low |
 | [`template.html`](template.html) | The page, with CSS that Chromium 68 understands |
 
-Not ported: anti-aliasing. The soundscape is the original's, unchanged.
+Not ported: anti-aliasing. The sound is this port's own and off by default: a low rumble, slow waves and the odd
+bubble, lighter and calmer than the original's soundscape, which stuttered on the TV.
 
 ## Build
 
@@ -83,7 +84,7 @@ The menu also has a row of buttons:
   | Warmth | From the original's blue towards a warmer white balance |
   | Golden hour | Lets the light drift to a warm late-afternoon colour and back every five minutes |
   | Life | How many of the fish, sharks, turtles and squid are drawn |
-  | Sound | The soundscape |
+  | Sound | Rumble, waves and bubbles (off to begin with) |
   | Picture (TV) | 480×270 at 15 frames a second, 640×360 at 12, or 720×405 at 10 |
   | Draw distance (TV) | How far kelp and rocks are drawn |
   | Self-tuning (TV) | Lowers the draw distance when frames come late, and raises it again when they don't |

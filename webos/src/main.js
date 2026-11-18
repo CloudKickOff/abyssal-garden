@@ -833,7 +833,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.tuning = () => ({ tune, det, tuneN, tuneSlip }); window.look = (...a) => { fly(false); lookAt(...a); }; window.squid = () => SQUID;
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.tuning = () => ({ tune, det, tuneN, tuneSlip }); window.audio = () => ({ AC, OUT, muted }); window.look = (...a) => { fly(false); lookAt(...a); }; window.squid = () => SQUID;
   window.where = (set, i) => { const a = set === 1 ? TURTLES : SHARKS, o = i * 8, R = a[o + 3], ta = F[TIME] * a[o + 5] + a[o + 7] * 6.3; return [a[o] + R * cos(ta), a[o + 1] + 1.5 * sin(2 * ta + a[o + 7] * 17), a[o + 2] + R * 0.75 * sin(ta)]; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
@@ -1044,9 +1044,9 @@ if (window.bench) window.step = (n = 1, ms = 33) => { for (let t = F[LAST]; n-- 
 //   yellow          the light's colour           blue           swim faster
 //   Back            menu (from the menu: leave the app)
 // The screensavers are buttons in the menu; G (or Play on a remote) starts the animated one, T the stills.
-// the soundscape (../../source/src/audio.js) starts on the first key or click; it is set up after this file has run
+// the sound (audio.js), if it is switched on, starts on the first key or click; it is set up after this file has run
 const snd = () => { try { sound(); } catch (e) {} };
-const soundOnOff = () => { snd(); try { mute(); } catch (e) {} };
+const soundOnOff = () => { try { mute(); } catch (e) {} };
 const statsOnOff = () => { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; };
 // the yellow button (L): the light's colour, cool as in the original, warm, then golden hour coming and going
 let flashT = 0;
@@ -1137,14 +1137,14 @@ const SETS = [
   { label: 'Warmth', v: () => WARM, set: (u) => { WARM = u; }, n: 10 },
   { label: 'Golden hour', on: () => golden, flip: () => { golden = !golden; } },
   { label: 'Life', v: () => LIFE, set: (u) => { LIFE = u; }, n: 10 },
-  { label: 'Sound', on: () => { try { return !!AC && !muted; } catch (e) { return false; } }, flip: soundOnOff },
+  { label: 'Sound', on: () => { try { return !muted; } catch (e) { return false; } }, flip: soundOnOff },
   { label: 'Picture', tv: 1, text: () => RESES[resI][3], step: (d) => { resI = (resI + d + 3) % 3; applyRes(); } },
   { label: 'Draw distance', tv: 1, v: () => (det - 0.25) / 0.75, set: (u) => { det = 0.25 + u * 0.75; }, n: 15 },
   { label: 'Self-tuning', tv: 1, on: () => tune, flip: () => { tune = !tune; } },
   { label: 'Sharpen when still', tv: 1, on: () => STILL, flip: () => { STILL = !STILL; } },
   { label: 'Stats line', on: () => hud, flip: statsOnOff },
 ].filter((r) => TV || !r.tv);
-const setSave = () => keep('abyssalSet', JSON.stringify({ rays: RAYS, warm: WARM, gold: golden, life: LIFE, res: resI, det: saver ? svDet : det, tune, still: STILL }));
+const setSave = () => keep('abyssalSet', JSON.stringify({ rays: RAYS, warm: WARM, gold: golden, life: LIFE, res: resI, det: saver ? svDet : det, tune, still: STILL, sound: (() => { try { return !muted; } catch (e) { return false; } })() }));
 const setDraw = () => SETS.forEach((r, i) => { const e = $('t').children[i].lastChild; if (r.v) e.firstChild.firstChild.style.width = round(r.v() * 100) + '%'; else e.textContent = r.text ? '◀ ' + r.text() + ' ▶' : r.on() ? 'On' : 'Off'; });
 // changes setting i one step down (d < 0) or up
 function setStep(i, d) {

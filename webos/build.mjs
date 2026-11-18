@@ -1,8 +1,8 @@
 // Builds the WebGL2 port into app/ (a webOS web app folder) and packs it as dist/<id>_<version>_all.ipk
 //   npm run build            minified
 //   npm run build:readable   unminified, for debugging
-// The world generator, the maths and the soundscape come unchanged from ../source/src; quality, shaders and main are
-// this port's.
+// The world generator and the maths come unchanged from ../source/src; quality, shaders, main and audio are this
+// port's.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { transformSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), up = path.join(here, '..', 'source', 'src');
-const FILES = [path.join(here, 'src', 'quality.js'), path.join(up, 'math.js'), path.join(here, 'src', 'shaders.js'), path.join(up, 'world.js'), path.join(here, 'src', 'main.js'), path.join(up, 'audio.js')]; // order matters
+const FILES = [path.join(here, 'src', 'quality.js'), path.join(up, 'math.js'), path.join(here, 'src', 'shaders.js'), path.join(up, 'world.js'), path.join(here, 'src', 'main.js'), path.join(here, 'src', 'audio.js')]; // order matters
 const readable = process.argv.includes('--readable');
 const TARGET = 'chrome68'; // the web engine of webOS TV 5
 
