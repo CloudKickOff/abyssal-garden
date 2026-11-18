@@ -99,6 +99,7 @@ The LG CX has a Mali-G51 graphics chip, which is limited by triangle count as mu
 - keeps one leaf in eight and then six kelp plants in ten, and thins rocks, sponges, corals, fish and glints further;
 - sorts the boulders into the culling grid and gives them, the sponges and the far terrain coarser versions;
 - uses a rock shader with 13 texture samples instead of 27, and 8 light-shaft steps instead of 12;
+- draws sponges and corals to 45 m, shrinking away rather than popping;
 - renders at a fixed 640×360 with 40% draw distance, paced to a steady 12 frames a second (480×270 would hold
   15), and enlarges that picture itself onto a 1920×1080 canvas: edge smoothing (FXAA), then a bicubic filter with a little sharpening.
   The screensavers draw at 1280×720 or 1920×1080 with full draw distance instead.

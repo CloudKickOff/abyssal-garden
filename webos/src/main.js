@@ -393,7 +393,7 @@ const ibSolids = vbuf(solidData);
 // every 2nd instance, corals every 3rd, tube sponges every 4th, fish every 5th, glints every 8th, drifting particles every
 // 2nd; the terrain past 40 m is a coarser mesh (farTerrain);
 // four kelp plants in ten are left out (thinPlants); rocks, sponges and corals are drawn to 3/4 and 2/3 of their
-// distance (DF, PROPD); the terrain stops at 130 m (past
+// distance (DF), sponges and corals to PROPD metres; the terrain stops at 130 m (past
 // that the haze hides nearly all of it); and everything that stands on the terrain is drawn before it, so the
 // terrain behind is never shaded.
 const DF = LEAN ? 0.75 : 1;
@@ -535,6 +535,8 @@ let hud = false, auto = false, cruise = 0, fast = 0, view = 0;
 let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, kyl = 0, kyr = 0, wv = 0, pjx = 0, pjy = 0, pOn = false, pT = 0;
 let mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
 const TANH = 0.6, NEAR = 0.1, EXPO = 0.62;
+let PROPD = 45; // TV level: sponges and corals are drawn to this many metres, shrinking away over the last quarter (on an
+// LG CX 45 m costs nothing measurable over 30; at 60 m one frame in seven misses its slot)
 let RAYS = TV ? 0.36 : 0.54; // strength of the light shafts (less on a TV: at its low resolution they read as haze)
 const rowOrd = new Uint8Array(CELLS);
 const RC = new Float64Array(32); // the camera the frame in progress is drawn from: a copy of F taken when it began
@@ -601,7 +603,7 @@ function camera() {
   const zx = cx - PURPLE[0], zz = cz - PURPLE[1]; let zt = (44 - sqrt(zx * zx + zz * zz)) / 18; zt = zt < 0 ? 0 : zt > 1 ? 1 : zt;
   m[51] = zt * zt * (3 - 2 * zt);
   let ek = (-cy - 8) / 26; ek = ek < 0 ? 0 : ek > 1 ? 1 : ek;
-  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det;
+  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det; m[59] = PROPD;
   gl.bindBuffer(gl.UNIFORM_BUFFER, ubo); gl.bufferSubData(gl.UNIFORM_BUFFER, 0, UB);
   { let cr = floor((cz - OZ) / CELLW) | 0; cr = cr < 0 ? 0 : cr > CELLS - 1 ? CELLS - 1 : cr; let n = 0; rowOrd[n++] = cr; for (let d = 1; d < CELLS; d++) { if (cr - d >= 0) rowOrd[n++] = cr - d; if (cr + d < CELLS) rowOrd[n++] = cr + d; } }
   RC.set(F);
@@ -637,8 +639,8 @@ const STEPS = [
   if (!SK.plants) for (let i = 0; i < 6; i++) {
     const lod = i === 3 || i === 4, p = Wd.props[i];
     if (LEAN) { // sponges: the far version from 10 m; corals have only the one
-      drawCells(p.start, p.lo, p.hi, 3, meshes[4 + i], 0, 0, i < 3 ? 10 : PROPD, ibProp[i], L_SOLIDI);
-      if (i < 3) drawCells(p.start, p.lo, p.hi, 3, meshes[30 + i], 0, 10, PROPD, ibProp[i], L_SOLIDI);
+      drawCells(p.start, p.lo, p.hi, 3, meshes[4 + i], -1, 0, i < 3 ? 10 : PROPD, ibProp[i], L_SOLIDI);
+      if (i < 3) drawCells(p.start, p.lo, p.hi, 3, meshes[30 + i], -1, 10, PROPD, ibProp[i], L_SOLIDI);
       continue;
     }
     drawCells(p.start, p.lo, p.hi, 3, meshes[4 + i], 0, 0, lod ? 6 : 110, ibProp[i], L_SOLIDI);
@@ -745,7 +747,7 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });

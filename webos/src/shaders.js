@@ -326,7 +326,8 @@ void main() {
   float sc = i.a.w;
   if (i.c.x < 1.5 && i.c.z > 1.5 && g.res.x > 0.) { sc *= 1. - ss(i.c.z * .7, i.c.z, distance(i.a.xyz, g.cam.xyz) / g.mis.z); }
   // the TV level draws sponges and corals (materials 4, 5) less far: they shrink away instead of popping
-  if (LEAN && i.c.x > 3.5 && g.res.x > 0.) { sc *= 1. - ss(${fl(PROPD * 0.72)}, ${fl(PROPD)}, distance(i.a.xyz, g.cam.xyz) / g.mis.z); }
+  // (by g.mis.w metres, whatever the draw distance scale)
+  if (LEAN && i.c.x > 3.5 && g.res.x > 0.) { sc *= 1. - ss(g.mis.w * .72, g.mis.w, distance(i.a.xyz, g.cam.xyz)); }
   vec3 w = i.a.xyz + qrot(i.b, i.p * sc);
   w.y += sin(g.cam.w * .3 + i.c.y * 40.) * i.c.w;
   o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = qrot(i.b, i.n.xyz); o.op = i.p * i.a.w + i.c.y * 37.; o.on = i.n.xyz;
