@@ -99,8 +99,8 @@ Beyond the original's mantas and its fish (twice the size here, to be seen acros
 a reef species: clownfish, yellow and blue tangs, royal gramma, parrotfish, a banded one, anthias; and each of the
 original's twelve big schools split into three smaller shoals on paths of their own), this port adds sharks and
 turtles on wide looping paths, and four squid: one hanging in front of viewpoints 1 and 4 and two beside the tour
-path. Come within 7 m and one darts away, three times in ten leaving a cloud of ink; half a minute later it swims
-back.
+path. Come within 7 m and one darts away, three times in ten leaving a cloud of ink. Follow it and catch it up
+again and it inks for certain. Half a minute after you leave it alone it swims back.
 
 While the app is open it tells webOS not to start its own screensaver.
 
