@@ -587,7 +587,8 @@ void main() {
   vec3 l = i.p * i.b.z * (.75 + .5 * h.z);
   l.z += sin(t * 9. + s * 50. + l.x * 5.) * .22 * (.25 * i.b.z - l.x);
   vec3 w = P + off + T * l.x + Up * l.y + S * l.z;
-  o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p; o.sd = s;
+  o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p;
+  o.sd = fract(s) + floor(i.b.w * 7.); // the fish's own number, and before the point its school's species (0 to 6)
   o.lt = shadow1(w);
   emit(o);
 }
@@ -597,10 +598,22 @@ void main() {
   VO i = vin();
   vec3 n = normalize(i.n); vec3 L = g.sun.xyz; vec3 V = normalize(g.cam.xyz - i.wp);
   float z = zone(i.wp); vec4 vv = vol(i.wp);
-  vec3 alb = mix(vec3f(.50, .68, .80), vec3f(.10, .22, .40), ss(-.05, .2, i.op.y));
-  alb = mix(alb, vec3f(.95, .8, .3), step(.86, fract(i.sd * 7.7)) * .6);
+  // The original's fish are all blue-grey, some with yellow. Here every school is a reef species, painted by where on
+  // the body (x: +.5 the nose, -.56 the tail tip; y: up): 0 clownfish, 1 yellow tang, 2 blue tang, 3 royal gramma,
+  // 4 parrotfish, 5 a black and white banded one, 6 anthias.
+  float sp = floor(i.sd); float s = fract(i.sd); float x = i.op.x; float y = i.op.y; vec3 alb;
+  if (sp < .5) { alb = mix(vec3f(1., .34, .03), vec3f(1.), ss(.8, .92, abs(sin(x * 8. + .6)))); }
+  else if (sp < 1.5) { alb = mix(vec3f(1., .78, .05), vec3f(1., .95, .6), ss(0., .12, -y)); }
+  else if (sp < 2.5) { alb = mix(vec3f(.03, .2, .95), vec3f(.01, .02, .08), ss(.03, .1, y) * ss(.3, -.15, x)); alb = mix(alb, vec3f(1., .82, .08), ss(-.28, -.4, x)); }
+  else if (sp < 3.5) { alb = mix(vec3f(1., .78, .08), vec3f(.72, .06, .75), ss(-.12, .12, x)); }
+  else if (sp < 4.5) { alb = mix(vec3f(.05, .75, .6), vec3f(.98, .4, .62), ss(.55, .9, sin(x * 14. + y * 22.) * .5 + .5)); }
+  else if (sp < 5.5) { alb = mix(vec3f(.95), vec3f(.02), ss(.45, .7, sin(x * 10. + 2.) * .5 + .5)); alb = mix(alb, vec3f(1., .8, .08), ss(-.3, -.45, x)); }
+  else { alb = mix(vec3f(1., .4, .28), vec3f(1., .68, .15), s); }
+  alb *= .8 + .4 * s;
   vec3 E = sunE(i.wp.y, z) * i.lt;
-  vec3 c = alb * (E * (.25 + .75 * sat(dot(n, L))) + amb(i.wp, n, vv.g, z) * 1.3);
+  vec3 lt = E * (.25 + .75 * sat(dot(n, L))) + amb(i.wp, n, vv.g, z) * 1.3;
+  // (like the corals: the blue-green light that falls on them comes back in their own colour, or the reds would be mud)
+  vec3 c = alb * (lt * .3 + 1.5 * dot(lt, vec3f(.1, .5, .5)));
   c += E * pow(sat(dot(n, normalize(V + L))), 24.) * 1.6 + vec3f(.3, .6, .7) * pow(1. - sat(dot(n, V)), 3.) * .25 * vv.g;
   oc = fin(fog(c, i.wp, z));
 }

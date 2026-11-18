@@ -95,7 +95,8 @@ The menu also has a row of buttons:
 
 ## What lives there
 
-Beyond the original's fish (twice the size here, to be seen across a room) and mantas, this port adds sharks and
+Beyond the original's mantas and its fish (twice the size here, to be seen across a room, and each school painted as
+a reef species: clownfish, yellow and blue tangs, royal gramma, parrotfish, a banded one, anthias), this port adds sharks and
 turtles on wide looping paths, and squid that hang near the tour path: come within 7 m and one leaves a cloud of ink
 and darts away.
 
