@@ -963,3 +963,60 @@ void main() {
   oc = vec4(lb < lo || lb > hi ? a : b, 1.);
 }
 `;
+
+// ---------------------------------------------------------------- sharks, turtles, squid (and their ink)
+// Like the fish: an instance is a path (a: centre, radius; b: seed, speed, size, phase), or with ex.w set one animal
+// at ex.xyz heading exd.xyz. par: tail wag speed and size, flap speed and size (a vertex's 4th normal value is how
+// much it flaps).
+const G_CRE_V = S_ANIM_V + `
+uniform vec4 par; uniform vec4 ex; uniform vec4 exd;
+void main() {
+  VI i = VI(a_p, a_n, a_a, a_b); VO o;
+  float s = i.b.x; float R = i.a.w; float t = g.cam.w; float sz = i.b.z;
+  float ta = t * i.b.y + i.b.w * 6.3; float ph = i.b.w * 17.;
+  vec3 P = i.a.xyz + vec3f(R * cos(ta), 1.5 * sin(2. * ta + ph), R * .75 * sin(ta));
+  vec3 T = normalize(vec3f(-R * sin(ta), 3. * cos(2. * ta + ph), R * .75 * cos(ta))) * sign(i.b.y);
+  if (ex.w > .5) { P = ex.xyz; T = normalize(exd.xyz); }
+  vec3 S = normalize(cross(vec3f(0., 1., 0.), T)); vec3 Up = cross(T, S);
+  vec3 l = i.p;
+  l.z += sin(t * par.x + s * 50. + l.x * 4.) * par.y * max(.35 - l.x, 0.);
+  l.y += sin(t * par.z + s * 9. - l.x * 5.) * i.n.w * par.w;
+  vec3 w = P + (T * l.x + Up * l.y + S * l.z) * sz;
+  o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p; o.sd = s;
+  o.lt = shadow1(w);
+  emit(o);
+}
+`;
+// cA: the underside's colour; cB: the back's, and in .a the scale of the mottling
+const G_CRE_F = GH + S_B + V_ANIM.fs + `
+uniform vec4 cA; uniform vec4 cB;
+void main() {
+  VO i = vin();
+  vec3 n = normalize(i.n) * (gl_FrontFacing ? 1. : -1.); vec3 L = g.sun.xyz; vec3 V = normalize(g.cam.xyz - i.wp);
+  float z = zone(i.wp); vec4 vv = vol(i.wp);
+  vec4 tx = textureSample(tD, sR, i.op.xz * cB.a + i.sd);
+  vec3 alb = mix(cA.rgb, cB.rgb, ss(-.04, .05, i.op.y)) * (.6 + .8 * tx.b);
+  vec3 E = sunE(i.wp.y, z) * i.lt;
+  vec3 c = alb * (E * (.25 + .75 * sat(dot(n, L))) * (.6 + caus2(i.wp, length(i.wp - g.cam.xyz))) + amb(i.wp, n, vv.g, z) * 1.3);
+  c += E * pow(sat(dot(n, normalize(V + L))), 24.) * .5 + vec3f(.3, .6, .7) * pow(1. - sat(dot(n, V)), 3.) * .2 * vv.g;
+  oc = fin(fog(c, i.wp, z));
+}
+`;
+// ink: soft dark blobs (a: position, size; b.x: how opaque)
+const V_INK = vary([['vec2', 'uv'], ['float', 'al', 1]]);
+const G_INK_V = GH + S_B + V_INK.vs + `
+layout(location = 0) in vec4 a; layout(location = 1) in vec4 b;
+void main() {
+  VO o; int vi = gl_VertexID; vec2 q = vec2f(f32(vi & 1), f32(vi >> 1)) * 2. - 1.;
+  vec3 w = a.xyz + (g.right.xyz * q.x + g.up.xyz * q.y) * a.w;
+  o.cp = g.vp * vec4f(w, 1.); o.uv = q; o.al = b.x;
+  emit(o);
+}
+`;
+const G_INK_F = GH + V_INK.fs + `
+void main() {
+  VO i = vin();
+  float r = dot(i.uv, i.uv), al = i.al * (1. - r) * (1. - r) * step(r, 1.);
+  oc = vec4(vec3(.012, .01, .02) * al, al);
+}
+`;

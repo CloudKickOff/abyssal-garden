@@ -4,6 +4,7 @@
 // World generation, the camera path and collision are the original code unchanged; the renderer talks to WebGL2
 // instead of WebGPU, and the input adds a TV remote (see the input section).
 const $ = (id) => document.getElementById(id);
+const ceil = Math.ceil;
 const canvas = $('c'), info = $('i'), body = document.body;
 if (TV) document.documentElement.className = 'tv';
 let loaded = 0, dead; // dead: the graphics context was lost
@@ -112,6 +113,8 @@ const pSolid = prog(G_SOLID_V, G_SOLID_F), pSolidSh = prog(G_SOLID_V, G_NONE);
 const pLeaf = prog(G_LEAF_V(9), G_LEAF_F), pLeaf5 = prog(G_LEAF_V(5), G_LEAF_F), pLeafS = prog(G_LEAF_V(3, 70), G_LEAF_F), pLeafF = prog(G_LEAF_V(3), G_LEAF_F);
 const pLeafSh = prog(G_LEAF_V(3), G_NONE);
 const pFish = prog(G_FISH_V, G_FISH_F), pManta = prog(G_MANTA_V, G_MANTA_F);
+const pCre = prog(G_CRE_V, G_CRE_F), uCre = {}; for (const n of ['par', 'ex', 'exd', 'cA', 'cB']) uCre[n] = gl.getUniformLocation(pCre, n);
+const pInk = prog(G_INK_V, G_INK_F);
 const pSurf = prog(G_SURF_V, G_SURF_F), pBack = prog(G_BACK_V, G_BACK_F);
 const pBub = prog(G_BUB_V, G_BUB_F), pSnow = prog(G_SNOW_V, G_SNOW_F), pGl = prog(G_GL_V, G_GL_F);
 const pWater = prog(G_FSV, G_WATER), uWater = gl.getUniformLocation(pWater, 'tm');
@@ -371,6 +374,49 @@ if (BAKE) {
       meshes: meshes.map((m) => ({ vb: m.vb, ib: m.ib, nv: m.nv })) });
   } catch (e) { console.warn(e); try { indexedDB.deleteDatabase('abyssal'); } catch (e2) {} } // no room: generate again next time
 }
+// Bigger animals, built like the fish (x forward, y up, z to the side; about one unit long) and drawn by one
+// shader: sharks and turtles on wide looping paths like the mantas', and squid that hang in place until the camera
+// comes close, then leave a cloud of ink and dart away (frame()). A vertex's 4th value says how much it flaps
+// (flippers, tentacles).
+const loft = (m, X, Hh, Ww, seg, flat) => { // a body: rings of `seg` vertices at X, half-height Hh and half-width Ww (flat: a flatter underside)
+  const rings = X.map((x, i) => { const r = []; for (let k = 0; k < seg; k++) { const a = k / seg * TAU, sy = sin(a); r.push(m.v(x, sy * Hh[i] * (sy < 0 ? flat : 1), cos(a) * Ww[i], 0)); } return r; });
+  for (let i = 0; i + 1 < rings.length; i++) for (let k = 0; k < seg; k++) { const k2 = (k + 1) % seg; m.quad(rings[i][k], rings[i + 1][k], rings[i + 1][k2], rings[i][k2]); }
+};
+const fin = (m, a, b, c, fa, fb, fc) => m.tri(m.v(a[0], a[1], a[2], fa || 0), m.v(b[0], b[1], b[2], fb || 0), m.v(c[0], c[1], c[2], fc || 0));
+function meshShark() {
+  const m = new Mesh();
+  loft(m, [0.5, 0.44, 0.3, 0.1, -0.1, -0.28, -0.42], [0.004, 0.04, 0.072, 0.085, 0.07, 0.04, 0.016], [0.004, 0.035, 0.065, 0.075, 0.06, 0.03, 0.01], 8, 0.8);
+  fin(m, [0.1, 0.08, 0], [-0.1, 0.07, 0], [-0.08, 0.21, 0]); // dorsal
+  fin(m, [-0.4, 0, 0], [-0.62, 0.21, 0], [-0.5, 0.01, 0]); fin(m, [-0.4, 0, 0], [-0.5, -0.01, 0], [-0.57, -0.12, 0]); // tail
+  for (const z of [-1, 1]) fin(m, [0.2, -0.03, z * 0.05], [0.04, -0.05, z * 0.06], [0.02, -0.11, z * 0.25]); // pectorals
+  return m.build();
+}
+function meshTurtle() {
+  const m = new Mesh();
+  loft(m, [0.3, 0.24, 0.08, -0.12, -0.28, -0.36], [0.01, 0.07, 0.12, 0.11, 0.06, 0.01], [0.02, 0.17, 0.27, 0.26, 0.16, 0.02], 10, 0.4); // shell
+  loft(m, [0.5, 0.46, 0.38, 0.3], [0.01, 0.045, 0.05, 0.035], [0.01, 0.04, 0.045, 0.035], 6, 1); // head
+  for (const z of [-1, 1]) { // front flippers (they flap), rear ones (a little)
+    fin(m, [0.2, 0, z * 0.2], [0.06, 0, z * 0.22], [-0.06, 0, z * 0.68], 0, 0, 1); fin(m, [0.2, 0, z * 0.2], [-0.06, 0, z * 0.68], [0.1, 0, z * 0.7], 0, 1, 1);
+    fin(m, [-0.24, 0, z * 0.14], [-0.34, 0, z * 0.1], [-0.5, 0, z * 0.26], 0, 0, 0.4);
+  }
+  return m.build();
+}
+function meshSquid() { // it swims mantle first: the pointed end is +x, the arms trail behind
+  const m = new Mesh();
+  loft(m, [0.5, 0.36, 0.14, -0.06, -0.14], [0.004, 0.05, 0.085, 0.09, 0.07], [0.004, 0.05, 0.085, 0.09, 0.07], 8, 1); // mantle
+  loft(m, [-0.12, -0.18, -0.26, -0.3], [0.05, 0.065, 0.06, 0.03], [0.05, 0.065, 0.06, 0.03], 6, 1); // head
+  for (const z of [-1, 1]) fin(m, [0.46, 0, z * 0.02], [0.24, 0, z * 0.07], [0.3, 0, z * 0.2]); // fins
+  for (let k = 0; k < 8; k++) { // arms: thin blades, more and more loose towards their tips
+    const a = k / 8 * TAU, c = cos(a), d = sin(a), w = 0.014;
+    for (const [x0, r0, x1, r1, f0, f1] of [[-0.28, 0.03, -0.5, 0.06, 0, 0.5], [-0.5, 0.06, -0.78, 0.075, 0.5, 1]]) {
+      const p = (x, r, e) => [x, d * r - c * w * e, c * r + d * w * e];
+      fin(m, p(x0, r0, -1), p(x0, r0, 1), p(x1, r1, 0), f0, f0, f1);
+    }
+  }
+  return m.build();
+}
+const CRE = [meshShark(), meshTurtle(), meshSquid()];
+meshes.push(...CRE);
 // TV level: far versions of the four boulders (26-29) and of the three sponges (30-32), built on every start
 if (LEAN) meshes.push(meshChunk(1, 2, 1).build(), meshChunk(7, 2, 1).build(), meshChunk(13, 2, 1).build(), meshChunk(22, 2, 1).build(),
   ...LATHE.map((l) => meshLathe(l[0], 8, l[2], 0).build()));
@@ -390,7 +436,7 @@ const ibSolids = vbuf(solidData);
 // The TV's graphics chip is limited by triangle count before pixel count, and most of the original's triangles do
 // not shrink with the draw distance. On the TV level the boulders (drawn everywhere, every frame, in the original)
 // are sorted into the culling grid and get a far version, as do the sponges; small rocks, pebbles and sponges keep
-// every 2nd instance, corals every 3rd, tube sponges every 4th, fish every 5th, glints every 8th, drifting particles every
+// every 2nd instance, corals every 3rd, tube sponges every 4th, fish every 2nd, glints every 8th, drifting particles every
 // 2nd; the terrain past 40 m is a coarser mesh (farTerrain);
 // four kelp plants in ten are left out (thinPlants); rocks, sponges and corals are drawn to 3/4 and 2/3 of their
 // distance (DF), sponges and corals to PROPD metres; the terrain stops at 130 m (past
@@ -398,7 +444,7 @@ const ibSolids = vbuf(solidData);
 // terrain behind is never shaded.
 const DF = LEAN ? 0.75 : 1;
 // every k-th element of `a` (elements of `stride` floats)
-const thin = (a, stride, k) => { const n = Math.ceil(a.length / stride / k), o = new Float32Array(n * stride); for (let i = 0; i < n; i++) for (let j = 0; j < stride; j++) o[i * stride + j] = a[i * k * stride + j]; return o; };
+const thin = (a, stride, k) => { const n = ceil(a.length / stride / k), o = new Float32Array(n * stride); for (let i = 0; i < n; i++) for (let j = 0; j < stride; j++) o[i * stride + j] = a[i * k * stride + j]; return o; };
 // every k-th instance of each cell of a cell-sorted set (12 floats each)
 const thinCells = (c, k) => {
   const st = new Uint32Array(c.start.length), o = new Float32Array(c.data.length); let n = 0;
@@ -442,15 +488,27 @@ if (LEAN) {
   for (const i of [0, 1, 2, 6]) thinCells(Wd.chunks[i], 2);
   // rocks carry the distance at which they have shrunk away (for materials 0 and 1, the 11th float)
   for (const c of Wd.chunks) for (let k = 0; k < c.data.length; k += 12) if (c.data[k + 8] < 1.5 && c.data[k + 10] > 1.5) c.data[k + 10] *= DF;
-  Wd.fish = thin(Wd.fish, 8, 5); Wd.glints = thin(Wd.glints, 8, 8); Wd.snow = thin(Wd.snow, 4, 2);
+  Wd.fish = thin(Wd.fish, 8, 2); Wd.glints = thin(Wd.glints, 8, 8); Wd.snow = thin(Wd.snow, 4, 2);
 }
 // is set piece i (the whale fluke, the ship) in front of the camera? They are one big mesh each, drawn whole
 const ahead = (i) => { const k = Wd.solids.ranges[i][0] * 12, x = solidData[k] - RC[CX], y = solidData[k + 1] - RC[CY], z = solidData[k + 2] - RC[CZ]; return x * RC[FX] + y * RC[FY] + z * RC[FZ] > -45; };
 
 const ibChunk = Wd.chunks.map((c) => vbuf(c.data)), ibProp = Wd.props.map((c) => vbuf(c.data));
 const ibBig = vbuf(new Uint8Array(Wd.big.buf)), ibBigF = vbuf(new Uint8Array(Wd.bigF.buf)), ibSmall = vbuf(new Uint8Array(Wd.small.buf));
+// ---------------------------------------------------------------- more life
+// The original's fish are 30 cm long and hard to see on a TV across a room: here they are twice the size, and their
+// order is shuffled so that drawing only the first part of them (the Life setting) thins every school alike.
+{
+  const f = Wd.fish, n = f.length / 8, o = new Float32Array(f.length);
+  for (let i = 0; i < n; i++) { const j = i * 7919 % n; o.set(f.subarray(j * 8, j * 8 + 8), i * 8); o[i * 8 + 6] *= 2; }
+  Wd.fish = o;
+}
+// a path: centre, radius, phase seed, speed (rad/s, the sign is the direction), length in metres, phase
+const SHARKS = new Float32Array([0, -24, 0, 72, 0.3, 0.021, 6, 0.1, -30, -17, -42, 44, 0.7, -0.03, 4.6, 0.6, 30, -27, 50, 30, 0.1, 0.04, 3.8, 0.35]);
+const TURTLES = new Float32Array([10, -37, 4, 12, 0.2, 0.07, 1.5, 0.2, 50, -36, 30, 14, 0.5, -0.06, 1.3, 0.7, -52, -34, -14, 16, 0.8, 0.055, 1.6, 0.45, 6, -35, -66, 13, 0.4, -0.065, 1.4, 0.9, 2, -34, 66, 15, 0.6, 0.06, 1.2, 0.05]);
 const ibFish = vbuf(Wd.fish), ibManta = vbuf(Wd.mantas), ibBubbles = vbuf(Wd.bubbles), ibSnowB = vbuf(Wd.snow);
 const ibGl = vbuf(Wd.glints), nGl = Wd.glints.length / 8;
+const ibShark = vbuf(SHARKS), ibTurtle = vbuf(TURTLES), ibOne = vbuf(new Float32Array([0, 0, 0, 0, 0.5, 1, 1.8, 0])), ibInk = gl.createBuffer();
 const nFish = Wd.fish.length / 8, nManta = Wd.mantas.length / 8, nBub = Wd.bubbles.length / 8, nSnow = Wd.snow.length / 4;
 const MANTA = meshes[12], FISH = meshes[13];
 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -666,7 +724,17 @@ const STEPS = [
   scene(); bindV(vbMesh, L_SOLIDV, 0); elems(ibMesh);
   if (!SK.fish) {
     gl.useProgram(pManta); drawMesh(MANTA, ibManta, L_ANIM, 0, nManta);
-    gl.useProgram(pFish); drawMesh(FISH, ibFish, L_ANIM, 0, nFish);
+    gl.useProgram(pFish); drawMesh(FISH, ibFish, L_ANIM, 0, ceil(nFish * LIFE));
+    // sharks, turtles, squid: wag speed and size, flap speed and size; underside and back colours (+ pattern scale)
+    gl.useProgram(pCre); gl.uniform4f(uCre.ex, 0, 0, 0, 0);
+    gl.uniform4f(uCre.par, 2.2, 0.22, 0, 0); gl.uniform4f(uCre.cA, 0.62, 0.68, 0.72, 0); gl.uniform4f(uCre.cB, 0.13, 0.19, 0.25, 2);
+    drawMesh(CRE[0], ibShark, L_ANIM, 0, ceil(SHARKS.length / 8 * LIFE));
+    gl.uniform4f(uCre.par, 0, 0, 1.7, 0.16); gl.uniform4f(uCre.cA, 0.6, 0.55, 0.36, 0); gl.uniform4f(uCre.cB, 0.13, 0.17, 0.06, 7);
+    drawMesh(CRE[1], ibTurtle, L_ANIM, 0, ceil(TURTLES.length / 8 * LIFE));
+    gl.uniform4f(uCre.par, 0, 0, 2.6, 0.07); gl.uniform4f(uCre.cA, 0.95, 0.5, 0.42, 0); gl.uniform4f(uCre.cB, 0.8, 0.2, 0.16, 14);
+    for (let i = 0, n = ceil(SQUID.length * LIFE); i < n; i++) {
+      const q = SQUID[i]; gl.uniform4f(uCre.ex, q.x, q.y, q.z, 1); gl.uniform4f(uCre.exd, q.hx, q.hy, q.hz, 0); drawMesh(CRE[2], ibOne, L_ANIM, 0, 1);
+    }
   }
   if (!SK.leaves) {
     gl.useProgram(LEAN ? pLeaf5 : pLeaf); drawCells(Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, LEAN ? 10 : 18, 0, 24, ibBig, L_LEAF);
@@ -689,6 +757,7 @@ const STEPS = [
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(pGl); bindV(ibGl, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nGl);
     gl.useProgram(pSnow); bindV(ibSnowB, L_SNOW, 0); gl.drawArraysInstanced(STRIP, 0, 4, nSnow);
+    if (nInk) { gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.useProgram(pInk); gl.bindBuffer(gl.ARRAY_BUFFER, ibInk); gl.bufferData(gl.ARRAY_BUFFER, INKB.subarray(0, nInk * 8), gl.DYNAMIC_DRAW); bindV(ibInk, L_BUB, 0); gl.drawArraysInstanced(STRIP, 0, 4, nInk); }
     gl.disable(gl.BLEND); gl.depthMask(true);
   }
   }],
@@ -758,7 +827,8 @@ function collide() {
 // ?bench in the address (or localStorage.abyssalDebug set, for the TV's inspector): bench(n) in the console draws n frames flat out and returns the milliseconds per frame,
 // state() the camera and input state
 let debug = /[?&]bench\b/.test(location.search); try { debug = debug || !!localStorage.abyssalDebug; } catch (e) {}
-if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
+if (debug) { window.SK = SK; window.pace = (ms) => { PACE = ms; ft.length = 0; }; window.frameTimes = () => ft; window.rays = (v) => { RAYS = v; }; window.life = (v) => { LIFE = v; }; window.look = (...a) => { fly(false); lookAt(...a); }; window.squid = () => SQUID;
+  window.where = (set, i) => { const a = set === 1 ? TURTLES : SHARKS, o = i * 8, R = a[o + 3], ta = F[TIME] * a[o + 5] + a[o + 7] * 6.3; return [a[o] + R * cos(ta), a[o + 1] + 1.5 * sin(2 * ta + a[o + 7] * 17), a[o + 2] + R * 0.75 * sin(ta)]; }; window.warm = (v) => { WARM = v; }; window.props = (v) => { PROPD = v; ft.length = 0; }; window.res = (w, h, d) => { pix = w * h; if (d) det = d; W = 0; resize(); ft.length = 0; }; window.upscale = (u, sh, aa) => { UP = u; SHARP = sh; SMOOTH = aa !== false; W = 0; resize(); ft.length = 0; }; }
 if (debug) window.bench = (n = 30) => { const t = performance.now(); for (let i = 0; i < n; i++) render(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); return (performance.now() - t) / n; }; // reading a pixel waits for the GPU
 
 if (window.bench) window.geo = () => ({ meshTris: meshes.map((m) => m.ib.length / 3), solids: Wd.solids.ranges.map((g) => g[1]), chunks: Wd.chunks.map((c) => c.n), props: Wd.props.map((c) => c.n), big: Wd.big.n, bigF: Wd.bigF.n, small: Wd.small.n, terrainTris: nTerrain / 3, glints: nGl, fish: nFish, mantas: nManta });
@@ -766,6 +836,32 @@ if (window.bench) window.state = () => ({ x: F[CX], y: F[CY], z: F[CZ], yaw: F[Y
 // the scripted flight (FLY) as an autopilot: one minute through the whole world, over and over
 const fly = (on) => { auto = on; F[FLT] = 0; cruise = 0; F[VX] = F[VY] = F[VZ] = 0; lkx = lky = l2x = l2y = mdx = mdy = 0; };
 const goTo = (i) => { fly(false); view = i; lookAt(...POSES[i]); };
+
+// Amount of life, 0 to 1 (a setting): the share of the fish, sharks, turtles and squid that is drawn.
+let LIFE = 0.7;
+// Squid hang in the water near the tour path. When the camera comes within 7 m one lets go a cloud of ink and darts
+// off, slowing to a new place to hang. x, y, z; heading; speed; t: seconds of flight left; ph: phase of its drift.
+const SQUID = [4, 11, 19].map((k, i) => ({ x: FLY[k * 6] + 3, y: FLY[k * 6 + 1] + 1 - i, z: FLY[k * 6 + 2] + 3, hx: 1, hy: 0, hz: 0, v: 0, t: 0, ph: i * 2.1 }));
+const INK = [], INKB = new Float32Array(64 * 8); let nInk = 0; // ink blobs: x, y, z, their drift, age, life, size
+function squidTick(dt) {
+  for (let i = 0, n = ceil(SQUID.length * LIFE); i < n; i++) {
+    const q = SQUID[i], dx = q.x - F[CX], dy = q.y - F[CY], dz = q.z - F[CZ], d = sqrt(dx * dx + dy * dy + dz * dz);
+    if (q.t <= 0 && d < 7 && !saver) { // off it goes, away from the camera and a little upwards, the ink left where it was
+      const l = sqrt(dx * dx + dz * dz) || 1; q.hx = dx / l * 0.94; q.hz = dz / l * 0.94; q.hy = 0.34; q.v = 11; q.t = 5;
+      for (let k = 0; k < 16 && INK.length < 64; k++) INK.push([q.x + rr(-0.4, 0.4), q.y + rr(-0.4, 0.4), q.z + rr(-0.4, 0.4), rr(-0.5, 0.5), rr(-0.2, 0.5), rr(-0.5, 0.5), 0, rr(7, 12), rr(0.5, 1.1)]);
+    }
+    if (q.t > 0) { q.t -= dt; q.v *= exp(-dt * 0.9); } else { q.ph += dt; q.v = 0.25; const a = q.ph * 0.2; q.hx += (cos(a) - q.hx) * dt; q.hz += (sin(a) - q.hz) * dt; q.hy += (sin(q.ph * 0.5) * 0.25 - q.hy) * dt; }
+    q.x += q.hx * q.v * dt; q.y = min(-4, max(-44, q.y + q.hy * q.v * dt)); q.z += q.hz * q.v * dt;
+    const r = sqrt(q.x * q.x + q.z * q.z); if (r > 140) { q.x *= 140 / r; q.z *= 140 / r; }
+  }
+  nInk = 0;
+  for (let k = INK.length - 1; k >= 0; k--) {
+    const b = INK[k]; b[6] += dt; if (b[6] > b[7]) { INK.splice(k, 1); continue; }
+    const s = exp(-b[6] * 0.6); b[0] += b[3] * s * dt; b[1] += b[4] * s * dt; b[2] += b[5] * s * dt;
+    const u = b[6] / b[7], o = nInk++ * 8;
+    INKB[o] = b[0]; INKB[o + 1] = b[1]; INKB[o + 2] = b[2]; INKB[o + 3] = b[8] * (1 + 2.2 * (1 - s)); INKB[o + 4] = 0.7 * min(1, b[6] * 4) * (1 - u) * (1 - u); INKB[o + 5] = k;
+  }
+}
 
 // Measure (the menu button, or P): times the frame as it is, then with each part left out in turn and at a quarter
 // of the pixels, and lists how long each loading stage took. The numbers stay on screen until Stats is toggled.
@@ -868,7 +964,7 @@ function frame(now) {
     if (was !== pix + det) keep('abyssalGL', [LV, pix < top ? pix | 0 : '', det]); // nothing kept at full resolution
     dynN = dynT = 0; resize();
   }
-  F[TIME] += dt;
+  F[TIME] += dt; squidTick(dt);
   if (saver === 1) saverTick(now); else if (saver === 2) liveTick(now);
   else if (auto) { F[FLT] += dt; if (F[FLT] >= FLYT) F[FLT] = 0; flyAt(); }
   else {
